@@ -175,7 +175,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // 5. Call Gemini API
     const genAI = new GoogleGenerativeAI(geminiApiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-3.1-pro-preview' });
 
     let rawText: string;
     try {
