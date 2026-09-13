@@ -1,0 +1,16 @@
+{
+  "name": "avslutningsmiddag-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "participant-app",
+    "admin-app",
+    "shared"
+  ],
+  "scripts": {
+    "dev:participant": "npm run dev --workspace=participant-app",
+    "dev:admin": "npm run dev --workspace=admin-app",
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint --workspaces"
+  }
+}
