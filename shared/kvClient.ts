@@ -18,7 +18,7 @@ export async function getParticipant(id: string): Promise<Participant | null> {
   return await kv.get<Participant>(`participant:${id}`);
 }
 
-export async function setParticipant(id: string, data: Participant): Promise<'OK' | null> {
+export async function setParticipant(id: string, data: Participant) {
   return await kv.set(`participant:${id}`, data);
 }
 
@@ -51,7 +51,7 @@ export async function getPersona(): Promise<Persona | null> {
   return await kv.get<Persona>('persona');
 }
 
-export async function setPersona(data: Persona): Promise<'OK' | null> {
+export async function setPersona(data: Persona) {
   return await kv.set('persona', data);
 }
 
@@ -63,7 +63,7 @@ export async function getSpeech(): Promise<Speech | null> {
   return await kv.get<Speech>('speech');
 }
 
-export async function setSpeech(data: Speech): Promise<'OK' | null> {
+export async function setSpeech(data: Speech) {
   return await kv.set('speech', data);
 }
 
