@@ -2,33 +2,31 @@ import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // ---------------------------------------------------------------------------
-// WAV header builder for raw PCM data returned by Gemini TTS
+// WAV header builder for raw PCM data returned by Gemini TTS.
+// Gemini TTS outputs 16-bit PCM, 24000 Hz, mono by default.
 // ---------------------------------------------------------------------------
-function pcmToWav(pcmBuffer: Buffer, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
-  const dataSize = pcmBuffer.length;
-  const headerSize = 44;
-  const header = Buffer.alloc(headerSize);
+function pcmToWav(pcmData: Buffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = pcmData.length;
+  const buffer = Buffer.alloc(44 + dataSize);
 
-  // RIFF descriptor
-  header.write('RIFF', 0);
-  header.writeUInt32LE(36 + dataSize, 4);   // file size - 8
-  header.write('WAVE', 8);
+  buffer.write("RIFF", 0, "ascii");
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8, "ascii");
+  buffer.write("fmt ", 12, "ascii");
+  buffer.writeUInt32LE(16, 16); // fmt chunk size
+  buffer.writeUInt16LE(1, 20); // PCM format
+  buffer.writeUInt16LE(numChannels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write("data", 36, "ascii");
+  buffer.writeUInt32LE(dataSize, 40);
+  pcmData.copy(buffer, 44);
 
-  // fmt sub-chunk
-  header.write('fmt ', 12);
-  header.writeUInt32LE(16, 16);             // sub-chunk size (PCM = 16)
-  header.writeUInt16LE(1, 20);              // audio format: PCM
-  header.writeUInt16LE(channels, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * channels * (bitsPerSample / 8), 28); // byte rate
-  header.writeUInt16LE(channels * (bitsPerSample / 8), 32);               // block align
-  header.writeUInt16LE(bitsPerSample, 34);
-
-  // data sub-chunk
-  header.write('data', 36);
-  header.writeUInt32LE(dataSize, 40);
-
-  return Buffer.concat([header, pcmBuffer]);
+  return buffer;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -96,23 +94,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
+    // 5. Decode the base64 PCM bytes from the Gemini response into a raw Buffer,
+    //    then wrap with a correct WAV header so browsers can play it natively.
+    //    Gemini TTS always returns raw 16-bit PCM at 24000 Hz mono — never pre-wrapped WAV.
     const rawBase64 = audioPart.inlineData.data;
-    const mimeType = audioPart.inlineData.mimeType ?? 'audio/wav';
+    const mimeType = audioPart.inlineData.mimeType ?? '';
 
-    // 5. If the response is raw PCM (L16), wrap it in a WAV container so
-    //    browsers can play it natively. WAV audio is returned as-is.
-    let audioUrl: string;
-    if (mimeType.includes('L16') || mimeType.includes('pcm')) {
-      const pcmBuffer = Buffer.from(rawBase64, 'base64');
-      // Parse sample rate from mimeType if present (e.g. "audio/L16;rate=24000")
-      const rateMatch = mimeType.match(/rate=(\d+)/);
-      const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
-      const wavBuffer = pcmToWav(pcmBuffer, sampleRate);
-      audioUrl = `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
-    } else {
-      // Already WAV or other browser-compatible format
-      audioUrl = `data:audio/wav;base64,${rawBase64}`;
-    }
+    // Parse sample rate from mimeType if explicitly provided (e.g. "audio/L16;rate=24000")
+    const rateMatch = mimeType.match(/rate=(\d+)/);
+    const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+
+    // Decode base64 → raw binary PCM bytes, then build a valid WAV
+    const rawPcmBuffer = Buffer.from(rawBase64, 'base64');
+    const wavBuffer = pcmToWav(rawPcmBuffer, sampleRate);
+    const audioUrl = `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
 
     return NextResponse.json({ audioUrl });
   } catch (error: unknown) {
