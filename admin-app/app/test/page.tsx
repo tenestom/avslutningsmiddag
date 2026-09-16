@@ -92,6 +92,7 @@ type VideoStep = 'audio' | 'video' | null;
 
 interface AvatarState {
   snippetText: string;
+  voiceName: string;
   isGeneratingPortrait: boolean;
   portraitError: string | null;
   portraitImageUrl: string | null;
@@ -103,6 +104,7 @@ interface AvatarState {
 function AvatarTestSection({ result }: { result: GenerationResult }) {
   const [state, setState] = useState<AvatarState>({
     snippetText: getFirstTwoSentences(result.speechScript),
+    voiceName: 'Kore',
     isGeneratingPortrait: false,
     portraitError: null,
     portraitImageUrl: null,
@@ -146,7 +148,7 @@ function AvatarTestSection({ result }: { result: GenerationResult }) {
       const audioRes = await fetch('/api/generate-audio-snippet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: state.snippetText }),
+        body: JSON.stringify({ text: state.snippetText, voiceName: state.voiceName }),
       });
       const audioData = (await audioRes.json()) as { audioUrl?: string } & Partial<ApiError>;
       if (!audioRes.ok || audioData.error) {
@@ -201,19 +203,40 @@ function AvatarTestSection({ result }: { result: GenerationResult }) {
         <div className="flex-1 border-t border-zinc-800/80" />
       </div>
 
-      {/* Snippet textarea */}
-      <div className="space-y-1.5">
-        <label className="block text-xs font-semibold text-zinc-400">
-          Textutdrag att testa{' '}
-          <span className="font-normal text-zinc-600">(redigera fritt — välj ett kort stycke)</span>
-        </label>
-        <textarea
-          rows={3}
-          value={state.snippetText}
-          onChange={(e) => patch({ snippetText: e.target.value })}
-          className="w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950/80 px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-        />
+      {/* Voice + snippet controls */}
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+        {/* Snippet textarea */}
+        <div className="space-y-1.5">
+          <label className="block text-xs font-semibold text-zinc-400">
+            Textutdrag att testa{' '}
+            <span className="font-normal text-zinc-600">(redigera fritt — välj ett kort stycke)</span>
+          </label>
+          <textarea
+            rows={3}
+            value={state.snippetText}
+            onChange={(e) => patch({ snippetText: e.target.value })}
+            className="w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950/80 px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+          />
+        </div>
+
+        {/* Voice selector */}
+        <div className="space-y-1.5 sm:w-52">
+          <label className="block text-xs font-semibold text-zinc-400">Röst</label>
+          <select
+            value={state.voiceName}
+            onChange={(e) => patch({ voiceName: e.target.value })}
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5 text-sm text-zinc-200 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+          >
+            <option value="Kore">Kore (kvinna, bestämd)</option>
+            <option value="Puck">Puck (man, pigg)</option>
+            <option value="Charon">Charon (man, informativ)</option>
+            <option value="Aoede">Aoede (kvinna, lätt)</option>
+            <option value="Orus">Orus (man, bestämd)</option>
+            <option value="Leda">Leda (kvinna, ungdomlig)</option>
+          </select>
+        </div>
       </div>
+
 
       {/* Step 1: Generate portrait */}
       <div className="space-y-3">

@@ -84,13 +84,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    // 4. Call fal.ai lip-sync model
+    // 4. Call fal.ai lip-sync model (non-distilled, higher motion quality)
     let result: { data: FalVideoOutput };
     try {
-      result = (await fal.subscribe('fal-ai/ltx-2-19b/distilled/audio-to-video', {
+      result = (await fal.subscribe('fal-ai/ltx-2-19b/audio-to-video', {
         input: {
           prompt:
-            'A person speaks naturally to the camera, direct eye contact, subtle head movement.',
+            'A person speaking directly and expressively to the camera, mouth moving naturally in sync with speech, animated facial expressions, natural head movement and blinking, engaged and lively delivery.',
           audio_url: uploadedAudioUrl,
           image_url: uploadedImageUrl,
           match_audio_length: true,

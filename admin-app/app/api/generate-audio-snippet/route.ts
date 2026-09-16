@@ -32,14 +32,14 @@ function pcmToWav(pcmData: Buffer, sampleRate = 24000, numChannels = 1, bitsPerS
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     // 1. Parse request body
-    let body: { text: string };
+    let body: { text: string; voiceName?: string };
     try {
-      body = (await req.json()) as { text: string };
+      body = (await req.json()) as { text: string; voiceName?: string };
     } catch {
       return NextResponse.json({ error: 'Invalid JSON in request body.' }, { status: 400 });
     }
 
-    const { text } = body;
+    const { text, voiceName = 'Kore' } = body;
     if (!text?.trim()) {
       return NextResponse.json({ error: 'text saknas i anropet.' }, { status: 400 });
     }
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
-                voiceName: 'Kore', // Neutral, clear voice suitable for Swedish
+                voiceName,
               },
             },
           },
