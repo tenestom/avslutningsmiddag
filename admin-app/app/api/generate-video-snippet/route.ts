@@ -97,21 +97,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         },
         logs: true,
       })) as { data: FalVideoOutput };
-    } catch (falError: unknown) {
-      console.error('fal.subscribe error:', falError);
-      const message = falError instanceof Error ? falError.message : 'Okänt fal.ai-fel';
+    } catch (error: any) {
+      console.error('fal.ai validation error:', JSON.stringify(error.body, null, 2));
+      const message = error instanceof Error ? error.message : 'Okänt fal.ai-fel';
+      const debug = error?.body?.detail
+        ? JSON.stringify(error.body.detail, null, 2)
+        : error?.body
+        ? JSON.stringify(error.body, null, 2)
+        : undefined;
+
       // Detect common auth error patterns
       if (message.toLowerCase().includes('unauthorized') || message.toLowerCase().includes('403')) {
         return NextResponse.json(
           {
             error:
               'fal.ai-nyckeln är ogiltig eller har inte behörighet. Kontrollera FAL_KEY i .env.local.',
+            debug,
           },
           { status: 401 }
         );
       }
       return NextResponse.json(
-        { error: `Videogenerering misslyckades: ${message}` },
+        { error: `Videogenerering misslyckades: ${message}`, debug },
         { status: 502 }
       );
     }
