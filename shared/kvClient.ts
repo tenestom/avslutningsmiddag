@@ -23,6 +23,41 @@ export async function setParticipant(id: string, data: Participant) {
 }
 
 /**
+ * Participant ID list helpers
+ * Key: participants:ids (list of UUIDs)
+ *
+ * NOTE: Only participants added after addParticipantId was introduced will appear
+ * in this list. Participants saved before this change were not backfilled.
+ */
+export async function addParticipantId(id: string): Promise<number> {
+  return await kv.rpush('participants:ids', id);
+}
+
+export async function getAllParticipantIds(): Promise<string[]> {
+  const ids = await kv.lrange<string>('participants:ids', 0, -1);
+  return ids ?? [];
+}
+
+export async function getAllParticipantsWithAnswers(): Promise<
+  Array<{ participant: Participant; answers: Answer[] }>
+> {
+  const ids = await getAllParticipantIds();
+  const results = await Promise.all(
+    ids.map(async (id) => {
+      const participant = await getParticipant(id);
+      if (!participant) return null;
+      const answers = await getAnswers(id);
+      return { participant, answers };
+    })
+  );
+  // Filter out any nulls (participant key deleted after ID was added to list)
+  return results.filter(
+    (r): r is { participant: Participant; answers: Answer[] } => r !== null
+  );
+}
+
+
+/**
  * Answers helpers
  * Key: answers:{participantId}
  */

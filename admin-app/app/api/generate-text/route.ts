@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { TEST_PARTICIPANTS, type TestParticipant } from '@/test-data/fixtures';
-import { getParticipant, getAnswers, getQAIds } from '@shared';
+import { getAllParticipantsWithAnswers, setPersona, setSpeech } from '@shared';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -137,29 +137,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         answers: p.answers,
       }));
     } else {
-      // Fetch real data from Vercel KV
-      // We iterate over qa_log:ids as a proxy for finding participant IDs isn't
-      // directly available, so we rely on a known pattern: participants are stored
-      // as participant:{id}. For now, fetch all participants by scanning answers keys.
-      // A simpler approach: fetch qa_log ids to build a participant set.
-      // Since we store participants independently, we need to enumerate them.
-      // The cleanest approach without a separate index is to use the kvClient as-is
-      // and gather all participant IDs via the QA log or via a dedicated index.
-      // For now, we return an error guiding the user to use test data, since
-      // a participant index key is not yet implemented in the shared kvClient.
-      const qaIds = await getQAIds();
-      if (qaIds.length === 0 && !useTestData) {
+      // Fetch real data from Vercel KV via participants:ids list
+      const allWithAnswers = await getAllParticipantsWithAnswers();
+
+      if (allWithAnswers.length === 0) {
         return NextResponse.json(
           {
             error:
-              'Inga riktiga deltagarsvar hittades i KV. Använd testdata (useTestData: true) eller se till att deltagare har skickat in svar.',
+              'Inga riktiga deltagarsvar hittades i KV. Kontrollera att deltagare har skickat in svar via deltagarformuläret.',
           },
           { status: 400 }
         );
       }
-      // Placeholder: for the real flow, you'd maintain a participant:ids list key.
-      // This will be wired up in a future step.
-      participants = [];
+
+      participants = allWithAnswers.map(({ participant, answers }) => ({
+        name: participant.name,
+        answers,
+      }));
     }
 
     if (participants.length === 0) {
@@ -220,7 +214,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    // 8. Return success
+    // 8. If using real data, persist the result to KV
+    if (!useTestData) {
+      try {
+        await setPersona({
+          name: personaName,
+          description: personaDescription,
+          portrait_url: '',
+        });
+        await setSpeech({
+          script: speechScript,
+          video_url: null,
+          status: 'draft',
+        });
+      } catch (persistError: unknown) {
+        // Log but don't fail the request — the client still gets the result
+        console.error('Failed to persist persona/speech to KV:', persistError);
+      }
+    }
+
+    // 9. Return success
     return NextResponse.json({ personaName, personaDescription, portraitPrompt, speechScript });
   } catch (error: unknown) {
     console.error('Unexpected error in /api/generate-text:', error);

@@ -14,15 +14,35 @@ export default function AdminHome() {
           Kontrollrum för att generera, testa och finjustera AI-personan inför middagen.
         </p>
 
-        <div className="mt-8 space-y-4">
+        <div className="mt-8 space-y-3">
+          {/* Real admin environment — primary CTA */}
           <Link
-            href="/test"
-            className="flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-6 py-3.5 text-sm font-bold text-zinc-950 transition hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-zinc-900"
+            href="/admin"
+            className="flex items-center justify-between gap-2 rounded-xl bg-amber-500 px-6 py-4 text-sm font-bold text-zinc-950 transition hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-zinc-900"
           >
-            Gå till testmiljö &rarr;
+            <div>
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-red-600 animate-pulse" />
+                <span className="text-xs font-semibold uppercase tracking-widest text-zinc-700">Skarpt läge</span>
+              </div>
+              <span>Gå till adminmiljö</span>
+            </div>
+            <span className="text-lg">&rarr;</span>
           </Link>
 
-          <p className="text-center text-xs text-zinc-500">
+          {/* Test environment — secondary */}
+          <Link
+            href="/test"
+            className="flex items-center justify-between gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 px-6 py-4 text-sm font-semibold text-violet-300 transition hover:bg-violet-500/20 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:ring-offset-2 focus:ring-offset-zinc-900"
+          >
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-widest text-violet-500 mb-0.5">Testmiljö</div>
+              <span>Gå till testmiljö (fiktiv data)</span>
+            </div>
+            <span className="text-lg">&rarr;</span>
+          </Link>
+
+          <p className="text-center text-xs text-zinc-500 pt-1">
             Live Q&amp;A och slutgiltig video kommer i nästa steg
           </p>
         </div>

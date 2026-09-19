@@ -1,6 +1,6 @@
 'use server';
 
-import { setParticipant, addAnswer } from '@shared';
+import { setParticipant, addAnswer, addParticipantId } from '@shared';
 
 export interface AnswerInput {
   question_number: number;
@@ -51,7 +51,10 @@ export async function submitParticipantAnswers(
       created_at: createdAt,
     });
 
-    // 2. Add each answer to KV
+    // 2. Register participant ID in the global list (used for bulk fetching)
+    await addParticipantId(participantId);
+
+    // 3. Add each answer to KV
     for (const ans of input.answers) {
       await addAnswer(participantId, {
         question_number: ans.question_number,
@@ -64,6 +67,7 @@ export async function submitParticipantAnswers(
       success: true,
       participantId,
     };
+
   } catch (error: unknown) {
     console.error('Error saving participant answers to KV:', error);
     return {
