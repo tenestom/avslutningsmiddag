@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import type { Persona, Speech } from '@shared';
+import { useState, useEffect } from 'react';
+import type { Speech } from '@shared';
+import { setSpeech as kvSetSpeech } from '@shared';
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,7 +103,13 @@ interface AvatarState {
   videoUrl: string | null;
 }
 
-function AvatarTestSection({ result }: { result: GenerationResult }) {
+function AvatarTestSection({
+  result,
+  onPortraitGenerated,
+}: {
+  result: GenerationResult;
+  onPortraitGenerated?: (imageUrl: string) => void;
+}) {
   const [state, setState] = useState<AvatarState>({
     snippetText: getFirstTwoSentences(result.speechScript),
     voiceName: 'Kore',
@@ -156,7 +164,9 @@ function AvatarTestSection({ result }: { result: GenerationResult }) {
       if (!res.ok || data.error) {
         patch({ portraitError: data.error ?? 'Okänt fel vid bildgenerering.' });
       } else {
-        patch({ portraitImageUrl: data.imageUrl ?? null });
+        const imageUrl = data.imageUrl ?? null;
+        patch({ portraitImageUrl: imageUrl });
+        if (imageUrl) onPortraitGenerated?.(imageUrl);
       }
     } catch {
       patch({ portraitError: 'Kunde inte nå /api/generate-portrait.' });
@@ -387,10 +397,406 @@ function AvatarTestSection({ result }: { result: GenerationResult }) {
 }
 
 // ---------------------------------------------------------------------------
+// Resolution picker + full-length video generation
+// ---------------------------------------------------------------------------
+
+const RESOLUTIONS = [
+  {
+    value: 'landscape_16_9',
+    label: 'Landskap 16:9',
+    description: 'Widescreen — passar projektor och skärm',
+    width: 1024,
+    height: 576,
+    fps: 24,
+  },
+  {
+    value: 'portrait_4_3',
+    label: 'Porträtt 4:3',
+    description: 'Talarhuvud — bäst för närbild av persona',
+    width: 768,
+    height: 1024,
+    fps: 24,
+  },
+  {
+    value: 'square_hd',
+    label: 'Kvadrat HD',
+    description: 'Kvadratisk 1024×1024 — maximal detaljnivå',
+    width: 1024,
+    height: 1024,
+    fps: 24,
+  },
+] as const;
+
+type ResolutionValue = (typeof RESOLUTIONS)[number]['value'];
+
+function computeCost(width: number, height: number, fps: number, durationSeconds: number): string {
+  const totalFrames = fps * durationSeconds;
+  const megapixels = (width * height / 1_000_000) * totalFrames;
+  const cost = megapixels * 0.0018;
+  return `$${cost.toFixed(2)}`;
+}
+
+interface FullVideoSectionProps {
+  speechScript: string;
+  portraitImageUrl: string | null;
+  onVideoSaved?: (videoUrl: string) => void;
+}
+
+type FullVideoStep =
+  | 'idle'
+  | 'generating_audio'
+  | 'pick_resolution'
+  | 'confirming'
+  | 'submitting'
+  | 'polling'
+  | 'done'
+  | 'error';
+
+interface FullVideoState {
+  step: FullVideoStep;
+  error: string | null;
+  voiceName: string;
+  audioUrl: string | null;
+  durationSeconds: number | null;
+  selectedResolution: ResolutionValue;
+  requestId: string | null;
+  videoUrl: string | null;
+  pollElapsed: number;
+  isSaving: boolean;
+  savedOk: boolean;
+}
+
+function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: FullVideoSectionProps) {
+  const [state, setState] = useState<FullVideoState>({
+    step: 'idle',
+    error: null,
+    voiceName: 'Kore',
+    audioUrl: null,
+    durationSeconds: null,
+    selectedResolution: 'portrait_4_3',
+    requestId: null,
+    videoUrl: null,
+    pollElapsed: 0,
+    isSaving: false,
+    savedOk: false,
+  });
+
+  const patch = (updates: Partial<FullVideoState>) =>
+    setState((prev) => ({ ...prev, ...updates }));
+
+  // Polling interval ref — cleared on unmount
+  const pollRef = { current: null as ReturnType<typeof setInterval> | null };
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  // Step 1: Generate full audio
+  const handleGenerateAudio = async () => {
+    patch({ step: 'generating_audio', error: null });
+    try {
+      const res = await fetch('/api/generate-full-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: speechScript, voiceName: state.voiceName }),
+      });
+      const data = await res.json() as { audioUrl?: string; durationSeconds?: number; error?: string };
+      if (!res.ok || data.error) {
+        patch({ step: 'error', error: data.error ?? 'Okänt fel vid röstsyntes.' });
+        return;
+      }
+      patch({ step: 'pick_resolution', audioUrl: data.audioUrl ?? null, durationSeconds: data.durationSeconds ?? null });
+    } catch {
+      patch({ step: 'error', error: 'Kunde inte nå /api/generate-full-audio.' });
+    }
+  };
+
+  // Step 2 -> 3: Pick resolution → confirm
+  const handlePickResolution = (value: ResolutionValue) => patch({ selectedResolution: value });
+  const handleConfirm = () => patch({ step: 'confirming' });
+  const handleCancelConfirm = () => patch({ step: 'pick_resolution' });
+
+  // Step 3 -> 4: Submit video job
+  const handleSubmitVideo = async () => {
+    if (!state.audioUrl || !portraitImageUrl) return;
+    patch({ step: 'submitting', error: null });
+
+    try {
+      const res = await fetch('/api/generate-full-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageUrl: portraitImageUrl,
+          audioUrl: state.audioUrl,
+          resolution: state.selectedResolution,
+        }),
+      });
+      const data = await res.json() as { requestId?: string; error?: string };
+      if (!res.ok || data.error) {
+        patch({ step: 'error', error: data.error ?? 'Okänt fel vid videoinlämning.' });
+        return;
+      }
+      patch({ step: 'polling', requestId: data.requestId ?? null, pollElapsed: 0 });
+    } catch {
+      patch({ step: 'error', error: 'Kunde inte nå /api/generate-full-video.' });
+    }
+  };
+
+  // Step 4: Poll status every 5 seconds
+  useEffect(() => {
+    if (state.step !== 'polling' || !state.requestId) return;
+
+    const startTime = Date.now();
+    pollRef.current = setInterval(async () => {
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      setState((prev) => ({ ...prev, pollElapsed: elapsed }));
+
+      try {
+        const res = await fetch(`/api/generate-full-video?requestId=${state.requestId}`);
+        const data = await res.json() as { status: string; videoUrl?: string; error?: string };
+
+        if (data.status === 'COMPLETED') {
+          stopPolling();
+          setState((prev) => ({ ...prev, step: 'done', videoUrl: data.videoUrl ?? null }));
+        } else if (data.status === 'FAILED') {
+          stopPolling();
+          setState((prev) => ({ ...prev, step: 'error', error: data.error ?? 'Videogenerering misslyckades.' }));
+        }
+        // IN_PROGRESS: continue polling
+      } catch {
+        // Network error during poll — keep trying
+      }
+    }, 5000);
+
+    return () => stopPolling();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.step, state.requestId]);
+
+  // Step 5: Save final video to KV
+  const handleSaveVideo = async () => {
+    if (!state.videoUrl) return;
+    patch({ isSaving: true });
+    try {
+      await kvSetSpeech({ script: speechScript, video_url: state.videoUrl, status: 'ready' });
+      patch({ isSaving: false, savedOk: true });
+      onVideoSaved?.(state.videoUrl);
+    } catch {
+      patch({ isSaving: false, error: 'Kunde inte spara video-URL till KV.' });
+    }
+  };
+
+  const selectedRes = RESOLUTIONS.find((r) => r.value === state.selectedResolution)!;
+
+  return (
+    <div className="border-t border-zinc-800 bg-zinc-950/30 p-5 sm:p-6 space-y-5">
+      {/* Section header */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold uppercase tracking-widest text-red-400">
+          Generera fullständig video
+        </span>
+        <div className="flex-1 border-t border-zinc-800/80" />
+      </div>
+
+      {/* Voice selector (shown at idle) */}
+      {state.step === 'idle' && (
+        <div className="space-y-4">
+          <div className="space-y-1.5 sm:w-52">
+            <label className="block text-xs font-semibold text-zinc-400">Röst</label>
+            <select
+              value={state.voiceName}
+              onChange={(e) => patch({ voiceName: e.target.value })}
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5 text-sm text-zinc-200 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-red-500/30"
+            >
+              <option value="Kore">Kore (kvinna, bestämd)</option>
+              <option value="Puck">Puck (man, pigg)</option>
+              <option value="Charon">Charon (man, informativ)</option>
+              <option value="Aoede">Aoede (kvinna, lätt)</option>
+              <option value="Orus">Orus (man, bestämd)</option>
+              <option value="Leda">Leda (kvinna, ungdomlig)</option>
+            </select>
+          </div>
+
+          <button
+            onClick={handleGenerateAudio}
+            disabled={!portraitImageUrl}
+            className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Generera röst för hela talet
+          </button>
+          {!portraitImageUrl && (
+            <p className="text-xs text-zinc-500">
+              Generera ett porträtt i förhandsgranskningssektionen ovan innan du skapar fullständig video.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Generating audio */}
+      {state.step === 'generating_audio' && (
+        <div className="flex items-center gap-3 text-sm text-zinc-400">
+          <Spinner className="h-4 w-4" />
+          <span>Genererar röst för hela talet… (kan ta 30–60 s)</span>
+        </div>
+      )}
+
+      {/* Audio ready + resolution picker */}
+      {(state.step === 'pick_resolution' || state.step === 'confirming') && state.durationSeconds !== null && (
+        <div className="space-y-5">
+          {/* Audio preview */}
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4 space-y-2">
+            <p className="text-sm text-zinc-300 font-medium">
+              ✓ Röst klar — <span className="text-amber-400">{state.durationSeconds} sekunder</span>
+            </p>
+            {state.audioUrl && <audio src={state.audioUrl} controls className="w-full h-8" />}
+          </div>
+
+          {/* Resolution picker */}
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-zinc-400">Välj upplösning</label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {RESOLUTIONS.map((res) => {
+                const cost = computeCost(res.width, res.height, res.fps, state.durationSeconds!);
+                const isSelected = state.selectedResolution === res.value;
+                return (
+                  <button
+                    key={res.value}
+                    type="button"
+                    onClick={() => handlePickResolution(res.value)}
+                    disabled={state.step === 'confirming'}
+                    className={`rounded-xl border p-4 text-left transition space-y-1 ${
+                      isSelected
+                        ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/30'
+                        : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-zinc-200">{res.label}</span>
+                      <span className={`text-sm font-bold ${isSelected ? 'text-amber-400' : 'text-zinc-400'}`}>
+                        {cost}
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-500">{res.description}</p>
+                    <p className="text-xs text-zinc-600">{res.width}×{res.height} @ {res.fps}fps</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Proceed to confirm */}
+          {state.step === 'pick_resolution' && (
+            <button
+              onClick={handleConfirm}
+              className="rounded-xl bg-red-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-500"
+            >
+              Generera video i {selectedRes.label} för {computeCost(selectedRes.width, selectedRes.height, selectedRes.fps, state.durationSeconds!)} →
+            </button>
+          )}
+
+          {/* Confirmation step */}
+          {state.step === 'confirming' && (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 space-y-3">
+              <p className="text-sm font-semibold text-red-300">
+                Generera video i <strong>{selectedRes.label}</strong> ({selectedRes.width}×{selectedRes.height}) för{' '}
+                <strong className="text-amber-400">
+                  {computeCost(selectedRes.width, selectedRes.height, selectedRes.fps, state.durationSeconds!)}
+                </strong>?
+                {' '}Videogenerering faktureras direkt mot ditt fal.ai-konto.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={handleSubmitVideo}
+                  className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold text-white hover:bg-red-500 transition"
+                >
+                  Bekräfta — starta generering
+                </button>
+                <button
+                  onClick={handleCancelConfirm}
+                  className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
+                >
+                  Avbryt
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Submitting job */}
+      {state.step === 'submitting' && (
+        <div className="flex items-center gap-3 text-sm text-zinc-400">
+          <Spinner className="h-4 w-4" />
+          <span>Laddar upp och skickar in videojobb till fal.ai…</span>
+        </div>
+      )}
+
+      {/* Polling */}
+      {state.step === 'polling' && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-3 text-sm text-zinc-400">
+            <Spinner className="h-4 w-4" />
+            <span>Genererar video… ({state.pollElapsed}s förfluten tid)</span>
+          </div>
+          <p className="text-xs text-zinc-600">
+            Lång video kan ta 3–10 minuter. Stäng inte flikens fönster.
+          </p>
+        </div>
+      )}
+
+      {/* Done */}
+      {state.step === 'done' && state.videoUrl && (
+        <div className="space-y-4">
+          <video
+            src={state.videoUrl}
+            controls
+            className="w-full max-w-xl rounded-xl border border-zinc-800 bg-black"
+            playsInline
+          />
+          {!state.savedOk ? (
+            <button
+              onClick={handleSaveVideo}
+              disabled={state.isSaving}
+              className="flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-zinc-950 hover:bg-amber-400 transition disabled:opacity-50"
+            >
+              {state.isSaving ? (
+                <><Spinner className="h-4 w-4" /><span>Sparar…</span></>
+              ) : (
+                <span>Spara som slutgiltig video</span>
+              )}
+            </button>
+          ) : (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 font-semibold">
+              ✓ Video sparad som slutgiltig — status satt till &quot;ready&quot;
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Error */}
+      {state.step === 'error' && state.error && (
+        <div className="space-y-3">
+          <ErrorAlert message={state.error} />
+          <button
+            onClick={() => patch({ step: 'idle', error: null, audioUrl: null, durationSeconds: null, requestId: null, videoUrl: null })}
+            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
+          >
+            Börja om
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main admin page
 // ---------------------------------------------------------------------------
 
 export default function AdminPage() {
+
   const [participantCount, setParticipantCount] = useState<number | null>(null);
   const [countError, setCountError] = useState<string | null>(null);
 
@@ -401,6 +807,10 @@ export default function AdminPage() {
 
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [isLoadingExisting, setIsLoadingExisting] = useState(true);
+  // Shared portrait URL — set by AvatarTestSection once a portrait is generated,
+  // then passed into FullVideoSection so it doesn't need to regenerate it.
+  const [sharedPortraitImageUrl, setSharedPortraitImageUrl] = useState<string | null>(null);
+
 
   // Load participant count and any existing persona/speech on mount
   useEffect(() => {
@@ -634,10 +1044,20 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Avatar test section */}
-            <AvatarTestSection result={result} />
+            {/* Avatar preview section */}
+            <AvatarTestSection
+              result={result}
+              onPortraitGenerated={(url) => setSharedPortraitImageUrl(url)}
+            />
+
+            {/* Full-length video generation section */}
+            <FullVideoSection
+              speechScript={result.speechScript}
+              portraitImageUrl={sharedPortraitImageUrl}
+            />
           </div>
         )}
+
 
         {!isLoadingExisting && !result && !isGenerating && (
           <div className="rounded-2xl border border-dashed border-zinc-800 p-8 text-center">
