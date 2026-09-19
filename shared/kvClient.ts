@@ -150,3 +150,38 @@ export async function getChatMessages(participantId: string): Promise<ChatMessag
 export async function addChatMessage(participantId: string, message: ChatMessage): Promise<number> {
   return await kv.rpush(`chat:${participantId}`, message);
 }
+
+/**
+ * Reset all event data — for use before the real event / during testing.
+ * Deletes all participant, answer, chat, qa_log, persona, and speech keys.
+ * Returns a summary of how many records were deleted.
+ */
+export async function resetAllData(): Promise<{
+  participantsDeleted: number;
+  qaEntriesDeleted: number;
+}> {
+  // 1. Delete per-participant data
+  const participantIds = await getAllParticipantIds();
+  await Promise.all(
+    participantIds.flatMap((id) => [
+      kv.del(`participant:${id}`),
+      kv.del(`answers:${id}`),
+      kv.del(`chat:${id}`),
+    ])
+  );
+  await kv.del('participants:ids');
+
+  // 2. Delete QA log entries
+  const qaIds = await getQAIds();
+  await Promise.all(qaIds.map((id) => kv.del(`qa_log:${id}`)));
+  await kv.del('qa_log:ids');
+
+  // 3. Delete persona and speech
+  await kv.del('persona');
+  await kv.del('speech');
+
+  return {
+    participantsDeleted: participantIds.length,
+    qaEntriesDeleted: qaIds.length,
+  };
+}

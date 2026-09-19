@@ -1066,7 +1066,145 @@ export default function AdminPage() {
             </p>
           </div>
         )}
+
+        {/* ── Danger Zone ──────────────────────────────────────────────── */}
+        <DangerZone
+          onResetComplete={(summary) => {
+            setParticipantCount(summary.participantsDeleted > 0 || summary.qaEntriesDeleted > 0 ? 0 : 0);
+            setResult(null);
+            setSharedPortraitImageUrl(null);
+            // Refresh actual count from server
+            fetch('/api/participant-count')
+              .then((r) => r.json())
+              .then((d: { count?: number }) => {
+                if (typeof d.count === 'number') setParticipantCount(d.count);
+              })
+              .catch(() => {});
+          }}
+        />
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Danger Zone component (separated so state is isolated)
+// ---------------------------------------------------------------------------
+
+interface ResetSummary {
+  participantsDeleted: number;
+  qaEntriesDeleted: number;
+}
+
+function DangerZone({ onResetComplete }: { onResetComplete: (summary: ResetSummary) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetResult, setResetResult] = useState<ResetSummary | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const CONFIRM_WORD = 'NOLLSTÄLL';
+  const canConfirm = confirmText === CONFIRM_WORD;
+
+  const handleReset = async () => {
+    if (!canConfirm) return;
+    setIsResetting(true);
+    setResetError(null);
+    setResetResult(null);
+
+    try {
+      const res = await fetch('/api/admin/reset', { method: 'POST' });
+      const data = await res.json() as { ok: boolean; participantsDeleted?: number; qaEntriesDeleted?: number; error?: string };
+
+      if (!res.ok || !data.ok) {
+        setResetError(data.error ?? 'Nollställning misslyckades.');
+      } else {
+        const summary: ResetSummary = {
+          participantsDeleted: data.participantsDeleted ?? 0,
+          qaEntriesDeleted: data.qaEntriesDeleted ?? 0,
+        };
+        setResetResult(summary);
+        setConfirmText('');
+        onResetComplete(summary);
+      }
+    } catch {
+      setResetError('Kunde inte nå /api/admin/reset. Kontrollera att servern körs.');
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  return (
+    <div className="mt-12 rounded-2xl border border-red-900/40 bg-red-950/20">
+      {/* Toggle header */}
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between px-5 py-4 text-left"
+      >
+        <div className="flex items-center gap-2">
+          <svg className="h-4 w-4 flex-shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <span className="text-sm font-semibold text-red-400">Farliga inställningar</span>
+        </div>
+        <span className="text-xs text-red-700 transition-transform" style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+          ▼
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-red-900/30 p-5 space-y-5">
+          <div>
+            <h3 className="text-sm font-bold text-red-300">Nollställ allt</h3>
+            <p className="mt-1 text-xs text-red-700/80">
+              Raderar alla deltagarsvar, QA-poster, persona och tal från KV. Åtgärden kan inte ångras.
+              Använd detta för att rensa testdata innan det riktiga evenemanget.
+            </p>
+          </div>
+
+          {resetResult ? (
+            <div className="rounded-xl border border-emerald-700/30 bg-emerald-950/30 px-4 py-3 space-y-1">
+              <p className="text-sm font-semibold text-emerald-400">✓ Nollställning klar</p>
+              <p className="text-xs text-emerald-600">
+                {resetResult.participantsDeleted} deltagare och {resetResult.qaEntriesDeleted} Q&amp;A-poster raderades.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-red-400">
+                  Skriv <span className="font-mono bg-red-900/30 px-1.5 py-0.5 rounded text-red-300">{CONFIRM_WORD}</span> för att bekräfta
+                </label>
+                <input
+                  type="text"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  placeholder={CONFIRM_WORD}
+                  className="w-full max-w-xs rounded-xl border border-red-900/40 bg-zinc-950 px-4 py-2.5 font-mono text-sm text-red-200 placeholder-red-900 transition focus:border-red-700 focus:outline-none focus:ring-2 focus:ring-red-700/30"
+                />
+              </div>
+
+              {resetError && <ErrorAlert message={resetError} />}
+
+              <button
+                onClick={handleReset}
+                disabled={!canConfirm || isResetting}
+                className="flex items-center gap-2 rounded-xl bg-red-700 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isResetting ? (
+                  <>
+                    <Spinner className="h-4 w-4" />
+                    <span>Nollställer…</span>
+                  </>
+                ) : (
+                  <span>Bekräfta nollställning</span>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
