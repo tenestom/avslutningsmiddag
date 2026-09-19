@@ -1,4 +1,4 @@
-import type { Persona, Speech } from "@shared";
+import Link from "next/link";
 
 export default function AdminHome() {
   return (
@@ -11,11 +11,19 @@ export default function AdminHome() {
           Avslutningsmiddag Admin
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-zinc-400">
-          Event organizer control room to configure the AI dinner persona, generate and preview the closing dinner speech, and moderate live Q&amp;A sessions.
+          Kontrollrum för att generera, testa och finjustera AI-personan inför middagen.
         </p>
-        <div className="mt-8 rounded-lg border border-dashed border-zinc-800 bg-zinc-950/40 p-4 text-center">
-          <p className="text-xs text-zinc-500">
-            Scaffolding ready &middot; Speech Generation &amp; Live Q&amp;A arriving soon
+
+        <div className="mt-8 space-y-4">
+          <Link
+            href="/test"
+            className="flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-6 py-3.5 text-sm font-bold text-zinc-950 transition hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-zinc-900"
+          >
+            Gå till testmiljö &rarr;
+          </Link>
+
+          <p className="text-center text-xs text-zinc-500">
+            Live Q&amp;A och slutgiltig video kommer i nästa steg
           </p>
         </div>
       </main>
