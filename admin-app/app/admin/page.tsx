@@ -88,6 +88,7 @@ function ErrorAlert({ message }: { message: string }) {
 
 type VideoStep = 'audio' | 'video' | null;
 type AudioSource = 'tts' | 'upload';
+type PortraitSource = 'ai' | 'upload';
 
 interface AvatarState {
   snippetText: string;
@@ -95,6 +96,7 @@ interface AvatarState {
   audioSource: AudioSource;
   audioUrl: string | null;
   audioError: string | null;
+  portraitSource: PortraitSource;
   isGeneratingPortrait: boolean;
   portraitError: string | null;
   portraitImageUrl: string | null;
@@ -116,6 +118,7 @@ function AvatarTestSection({
     audioSource: 'tts',
     audioUrl: null,
     audioError: null,
+    portraitSource: 'ai',
     isGeneratingPortrait: false,
     portraitError: null,
     portraitImageUrl: null,
@@ -151,6 +154,49 @@ function AvatarTestSection({
     reader.onerror = () => patch({ audioError: 'Ett fel uppstod vid inläsning av ljudfilen.' });
     reader.readAsDataURL(file);
   };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    patch({ portraitError: null });
+
+    // Validate size: max 10MB
+    const MAX_SIZE_BYTES = 10 * 1024 * 1024;
+    if (file.size > MAX_SIZE_BYTES) {
+      patch({
+        portraitError: `Bilden är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maximal filstorlek är 10 MB.`,
+      });
+      return;
+    }
+
+    // Validate type: jpeg/png/webp only
+    const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
+    const fileName = file.name.toLowerCase();
+    const hasValidExt = validExtensions.some((ext) => fileName.endsWith(ext));
+    const validMimes = ['image/jpeg', 'image/png', 'image/webp'];
+
+    if (!hasValidExt || !validMimes.includes(file.type)) {
+      patch({
+        portraitError: 'Ogiltigt filformat. Endast JPEG, PNG och WebP accepteras.',
+      });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl === 'string') {
+        patch({ portraitImageUrl: dataUrl, portraitError: null });
+        onPortraitGenerated?.(dataUrl);
+      }
+    };
+    reader.onerror = () => {
+      patch({ portraitError: 'Ett fel uppstod vid inläsning av bilden.' });
+    };
+    reader.readAsDataURL(file);
+  };
+
 
   const handleGeneratePortrait = async () => {
     patch({ isGeneratingPortrait: true, portraitError: null });
@@ -326,23 +372,71 @@ function AvatarTestSection({
 
       {/* Step 1: Portrait */}
       <div className="space-y-3">
-        <button
-          onClick={handleGeneratePortrait}
-          disabled={state.isGeneratingPortrait}
-          className="flex items-center justify-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {state.isGeneratingPortrait ? (
-            <>
-              <Spinner className="h-4 w-4" />
-              <span>Genererar porträtt…</span>
-            </>
-          ) : state.portraitImageUrl ? (
-            <span>Generera nytt porträtt</span>
-          ) : (
-            <span>Generera porträtt</span>
-          )}
-        </button>
+        {/* Portrait source toggle */}
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold text-zinc-400">Porträttkälla</label>
+          <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
+            <button
+              type="button"
+              onClick={() => patch({ portraitSource: 'ai', portraitError: null })}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                state.portraitSource === 'ai'
+                  ? 'bg-amber-500 text-zinc-950 shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              AI-genererat porträtt
+            </button>
+            <button
+              type="button"
+              onClick={() => patch({ portraitSource: 'upload', portraitError: null })}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                state.portraitSource === 'upload'
+                  ? 'bg-amber-500 text-zinc-950 shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Ladda upp egen bild
+            </button>
+          </div>
+        </div>
+
+        {state.portraitSource === 'ai' ? (
+          <div>
+            <button
+              onClick={handleGeneratePortrait}
+              disabled={state.isGeneratingPortrait}
+              className="flex items-center justify-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {state.isGeneratingPortrait ? (
+                <>
+                  <Spinner className="h-4 w-4" />
+                  <span>Genererar porträtt…</span>
+                </>
+              ) : state.portraitImageUrl ? (
+                <span>Generera nytt porträtt</span>
+              ) : (
+                <span>Generera porträtt</span>
+              )}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+            <div className="space-y-1">
+              <label className="block text-xs font-semibold text-zinc-300">Ladda upp egen bild</label>
+              <p className="text-xs text-zinc-500">Stöder JPEG, PNG och WebP (max 10 MB).</p>
+            </div>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+              onChange={handleImageUpload}
+              className="block w-full text-xs text-zinc-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-500 file:text-zinc-950 hover:file:bg-amber-400 file:cursor-pointer cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950/80 p-2"
+            />
+          </div>
+        )}
+
         {state.portraitError && <ErrorAlert message={state.portraitError} />}
+
         {state.portraitImageUrl && (
           <div className="overflow-hidden rounded-xl border border-zinc-800">
             {/* eslint-disable-next-line @next/next/no-img-element */}
