@@ -589,6 +589,8 @@ type FullVideoStep =
 interface FullVideoState {
   step: FullVideoStep;
   error: string | null;
+  audioSource: 'tts' | 'upload';
+  uploadError: string | null;
   voiceName: string;
   audioUrl: string | null;
   durationSeconds: number | null;
@@ -604,6 +606,8 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
   const [state, setState] = useState<FullVideoState>({
     step: 'idle',
     error: null,
+    audioSource: 'tts',
+    uploadError: null,
     voiceName: 'Kore',
     audioUrl: null,
     durationSeconds: null,
@@ -628,7 +632,57 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
     }
   };
 
-  // Step 1: Generate full audio
+  // Handle custom audio file upload — reads duration via browser Audio API
+  const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    patch({ uploadError: null, audioUrl: null, durationSeconds: null });
+
+    // Validate size: 20 MB max
+    if (file.size > 20 * 1024 * 1024) {
+      patch({
+        uploadError: `Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maximal filstorlek är 20 MB.`,
+      });
+      return;
+    }
+
+    // Validate type: wav, mp3, m4a, ogg
+    const validExtensions = ['.wav', '.mp3', '.m4a', '.ogg'];
+    const validMimes = [
+      'audio/wav', 'audio/x-wav', 'audio/wave',
+      'audio/mpeg', 'audio/mp3',
+      'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac',
+      'audio/ogg', 'application/ogg',
+    ];
+    const hasValidExt = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext));
+    if (!hasValidExt && !validMimes.includes(file.type)) {
+      patch({ uploadError: 'Ogiltigt filformat. Endast WAV, MP3, M4A och OGG accepteras.' });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+
+      // Detect duration using the browser Audio API
+      const audio = new Audio(dataUrl);
+      audio.addEventListener('loadedmetadata', () => {
+        const dur = isFinite(audio.duration) ? Math.round(audio.duration) : null;
+        patch({ audioUrl: dataUrl, durationSeconds: dur, uploadError: null });
+      });
+      audio.addEventListener('error', () => {
+        // Duration unknown — still allow the upload; cost estimate will be unavailable
+        patch({ audioUrl: dataUrl, durationSeconds: null, uploadError: null });
+      });
+    };
+    reader.onerror = () => {
+      patch({ uploadError: 'Ett fel uppstod vid inläsning av ljudfilen.' });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Step 1 (TTS path): Generate full audio via Gemini TTS
   const handleGenerateAudio = async () => {
     patch({ step: 'generating_audio', error: null });
     try {
@@ -734,39 +788,125 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
         <div className="flex-1 border-t border-zinc-800/80" />
       </div>
 
-      {/* Voice selector (shown at idle) */}
+      {/* Idle step: audio source toggle + TTS or upload UI */}
       {state.step === 'idle' && (
         <div className="space-y-4">
-          <div className="space-y-1.5 sm:w-52">
-            <label className="block text-xs font-semibold text-zinc-400">Röst</label>
-            <select
-              value={state.voiceName}
-              onChange={(e) => patch({ voiceName: e.target.value })}
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5 text-sm text-zinc-200 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-red-500/30"
-            >
-              <option value="Kore">Kore (kvinna, bestämd)</option>
-              <option value="Puck">Puck (man, pigg)</option>
-              <option value="Charon">Charon (man, informativ)</option>
-              <option value="Aoede">Aoede (kvinna, lätt)</option>
-              <option value="Orus">Orus (man, bestämd)</option>
-              <option value="Leda">Leda (kvinna, ungdomlig)</option>
-            </select>
+          {/* Source toggle */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold text-zinc-400">Ljudkälla</label>
+            <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
+              <button
+                type="button"
+                onClick={() => patch({ audioSource: 'tts', audioUrl: null, durationSeconds: null, uploadError: null })}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  state.audioSource === 'tts'
+                    ? 'bg-red-500/20 text-red-300'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                AI-genererad röst
+              </button>
+              <button
+                type="button"
+                onClick={() => patch({ audioSource: 'upload', audioUrl: null, durationSeconds: null, uploadError: null })}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  state.audioSource === 'upload'
+                    ? 'bg-red-500/20 text-red-300'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Ladda upp eget ljud (hela talet)
+              </button>
+            </div>
           </div>
 
-          <button
-            onClick={handleGenerateAudio}
-            disabled={!portraitImageUrl}
-            className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Generera röst för hela talet
-          </button>
-          {!portraitImageUrl && (
-            <p className="text-xs text-zinc-500">
-              Generera ett porträtt i förhandsgranskningssektionen ovan innan du skapar fullständig video.
-            </p>
+          {/* TTS path: voice selector + generate button */}
+          {state.audioSource === 'tts' && (
+            <>
+              <div className="space-y-1.5 sm:w-52">
+                <label className="block text-xs font-semibold text-zinc-400">Röst</label>
+                <select
+                  value={state.voiceName}
+                  onChange={(e) => patch({ voiceName: e.target.value })}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5 text-sm text-zinc-200 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-red-500/30"
+                >
+                  <option value="Kore">Kore (kvinna, bestämd)</option>
+                  <option value="Puck">Puck (man, pigg)</option>
+                  <option value="Charon">Charon (man, informativ)</option>
+                  <option value="Aoede">Aoede (kvinna, lätt)</option>
+                  <option value="Orus">Orus (man, bestämd)</option>
+                  <option value="Leda">Leda (kvinna, ungdomlig)</option>
+                </select>
+              </div>
+
+              <button
+                onClick={handleGenerateAudio}
+                disabled={!portraitImageUrl}
+                className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Generera röst för hela talet
+              </button>
+              {!portraitImageUrl && (
+                <p className="text-xs text-zinc-500">
+                  Generera ett porträtt i förhandsgranskningssektionen ovan innan du skapar fullständig video.
+                </p>
+              )}
+            </>
+          )}
+
+          {/* Upload path: file input + preview + proceed button */}
+          {state.audioSource === 'upload' && (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-zinc-400">
+                  Ladda upp ljudfil (WAV, MP3, M4A eller OGG — max 20 MB)
+                </label>
+                <input
+                  type="file"
+                  accept="audio/*"
+                  onChange={handleAudioUpload}
+                  className="block w-full text-sm text-zinc-400 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-zinc-200 hover:file:bg-zinc-700 file:cursor-pointer"
+                />
+              </div>
+
+              {/* Validation error */}
+              {state.uploadError && (
+                <p className="text-xs text-red-400">{state.uploadError}</p>
+              )}
+
+              {/* Preview + duration once file is loaded */}
+              {state.audioUrl && (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4 space-y-2">
+                  <p className="text-sm text-zinc-300 font-medium">
+                    ✓ Ljud laddat
+                    {state.durationSeconds !== null && (
+                      <> — <span className="text-amber-400">{state.durationSeconds} sekunder</span></>
+                    )}
+                  </p>
+                  <audio src={state.audioUrl} controls className="w-full h-8" />
+                </div>
+              )}
+
+              {/* Proceed to resolution picker */}
+              {state.audioUrl && (
+                <button
+                  onClick={() => patch({ step: 'pick_resolution' })}
+                  disabled={!portraitImageUrl}
+                  className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Välj upplösning och generera video →
+                </button>
+              )}
+              {!portraitImageUrl && (
+                <p className="text-xs text-zinc-500">
+                  Generera ett porträtt i förhandsgranskningssektionen ovan innan du skapar fullständig video.
+                </p>
+              )}
+            </div>
           )}
         </div>
       )}
+
 
       {/* Generating audio */}
       {state.step === 'generating_audio' && (
@@ -914,7 +1054,7 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
         <div className="space-y-3">
           <ErrorAlert message={state.error} />
           <button
-            onClick={() => patch({ step: 'idle', error: null, audioUrl: null, durationSeconds: null, requestId: null, videoUrl: null })}
+            onClick={() => patch({ step: 'idle', error: null, uploadError: null, audioUrl: null, durationSeconds: null, requestId: null, videoUrl: null })}
             className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
           >
             Börja om
