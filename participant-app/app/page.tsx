@@ -43,7 +43,6 @@ const QUESTIONS: QuestionDef[] = [
 ];
 
 export default function ParticipantFormPage() {
-  const [name, setName] = useState('');
   const [answers, setAnswers] = useState<Record<number, string>>({
     1: '',
     2: '',
@@ -67,23 +66,8 @@ export default function ParticipantFormPage() {
     }
   };
 
-  const handleNameChange = (val: string) => {
-    setName(val);
-    if (errors.name) {
-      setErrors((prev) => {
-        const next = { ...prev };
-        delete next.name;
-        return next;
-      });
-    }
-  };
-
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
-
-    if (!name.trim()) {
-      newErrors.name = 'Vänligen fyll i ditt namn.';
-    }
 
     QUESTIONS.forEach((q) => {
       const ans = (answers[q.number] || '').trim();
@@ -117,7 +101,6 @@ export default function ParticipantFormPage() {
 
     try {
       const payload = {
-        name: name.trim(),
         answers: QUESTIONS.map((q) => ({
           question_number: q.number,
           question_text: q.text,
@@ -165,18 +148,19 @@ export default function ParticipantFormPage() {
             </svg>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-            Tack, {name}!
+            Tack för dina svar!
           </h1>
           <p className="mt-3 text-base text-zinc-300">
             Dina svar är sparade.
           </p>
           <p className="mt-2 text-sm text-zinc-400">
-            Dina reflektioner och minnen kommer att vävas in i kvällens tal och persona. Vi ses på avslutningsmiddagen!
+            Vi ses på avslutningsmiddagen!
           </p>
         </main>
       </div>
     );
   }
+
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 px-4 py-8 sm:px-6 lg:px-8">
@@ -191,7 +175,7 @@ export default function ParticipantFormPage() {
             Avslutningsmiddag
           </h1>
           <p className="mt-2 text-sm sm:text-base text-zinc-400 leading-relaxed">
-            Dela dina upplevelser och tankar från kursen. Svaren används som underlag för kvällens tal och den digitala personan.
+            Dela dina upplevelser och tankar från kursen.
           </p>
         </header>
 
@@ -222,37 +206,8 @@ export default function ParticipantFormPage() {
           )}
 
           <form onSubmit={handleSubmit} noValidate className="space-y-7">
-            {/* Name Input */}
-            <div className="space-y-2">
-              <label
-                htmlFor="participant-name"
-                className="block text-sm sm:text-base font-semibold text-zinc-200"
-              >
-                Namn <span className="text-emerald-400">*</span>
-              </label>
-              <input
-                id="participant-name"
-                type="text"
-                value={name}
-                onChange={(e) => handleNameChange(e.target.value)}
-                placeholder="Ditt för- och efternamn"
-                aria-invalid={errors.name ? 'true' : 'false'}
-                aria-describedby={errors.name ? 'name-error' : undefined}
-                className={`w-full rounded-xl border bg-zinc-950/80 px-4 py-3.5 text-base text-white placeholder-zinc-500 transition focus:outline-none focus:ring-2 ${
-                  errors.name
-                    ? 'border-red-500/60 focus:ring-red-500/40'
-                    : 'border-zinc-800 focus:border-zinc-700 focus:ring-emerald-500/30'
-                }`}
-              />
-              {errors.name && (
-                <p id="name-error" className="text-xs sm:text-sm font-medium text-red-400">
-                  {errors.name}
-                </p>
-              )}
-            </div>
-
             {/* Questions */}
-            <div className="space-y-8 pt-2">
+            <div className="space-y-8">
               {QUESTIONS.map((q) => {
                 const errorKey = `question_${q.number}`;
                 const hasError = !!errors[errorKey];
@@ -301,9 +256,10 @@ export default function ParticipantFormPage() {
             {/* Helper text */}
             <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4 text-center">
               <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
-                💡 <span className="text-zinc-300 font-medium">Tips:</span> Skriv gärna 1–3 meningar per fråga – ju mer konkret, desto roligare blir talet!
+                💡 <span className="text-zinc-300 font-medium">Tips:</span> Skriv gärna 1–3 meningar per fråga!
               </p>
             </div>
+
 
             {/* Submit button */}
             <div className="pt-2">

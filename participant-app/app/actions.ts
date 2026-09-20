@@ -9,7 +9,7 @@ export interface AnswerInput {
 }
 
 export interface SubmitAnswersInput {
-  name: string;
+  name?: string;
   answers: AnswerInput[];
 }
 
@@ -23,11 +23,6 @@ export async function submitParticipantAnswers(
   input: SubmitAnswersInput
 ): Promise<SubmitAnswersResult> {
   try {
-    const trimmedName = input.name?.trim() ?? '';
-    if (!trimmedName) {
-      return { success: false, error: 'Namn måste fyllas i.' };
-    }
-
     if (!input.answers || input.answers.length !== 5) {
       return { success: false, error: 'Alla 5 frågor måste besvaras.' };
     }
@@ -44,12 +39,12 @@ export async function submitParticipantAnswers(
     const participantId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
 
-    // 1. Save participant to KV
+    // 1. Save participant to KV (anonymous)
     await setParticipant(participantId, {
       id: participantId,
-      name: trimmedName,
       created_at: createdAt,
     });
+
 
     // 2. Register participant ID in the global list (used for bulk fetching)
     await addParticipantId(participantId);

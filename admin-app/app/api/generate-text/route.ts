@@ -20,7 +20,7 @@ interface GenerateTextResponse {
 }
 
 interface ParticipantWithAnswers {
-  name: string;
+  name?: string;
   answers: Array<{
     question_number: number;
     question_text: string;
@@ -42,10 +42,12 @@ function formatAnswers(participants: ParticipantWithAnswers[]): string {
         .sort((a, b) => a.question_number - b.question_number)
         .map((a) => `  Fråga ${a.question_number}: ${a.answer_text}`)
         .join('\n');
-      return `Deltagare ${i + 1} (${p.name}):\n${answerLines}`;
+      const label = p.name ? `Deltagare ${i + 1} (${p.name})` : `Deltagare ${i + 1}`;
+      return `${label}:\n${answerLines}`;
     })
     .join('\n\n');
 }
+
 
 /**
  * Build the prompt for Gemini.

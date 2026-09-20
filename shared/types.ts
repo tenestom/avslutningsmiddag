@@ -4,7 +4,7 @@ export type QAStatus = 'pending' | 'approved' | 'played';
 
 export interface Participant {
   id: string;
-  name: string;
+  name?: string;
   created_at: string;
 }
 
