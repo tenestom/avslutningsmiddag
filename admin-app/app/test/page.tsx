@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -88,7 +88,7 @@ function ErrorAlert({ message }: { message: string }) {
 // Avatar test section (embedded in each ResultCard)
 // ---------------------------------------------------------------------------
 
-type VideoStep = 'audio' | 'video' | null;
+type VideoStep = 'audio' | 'submit' | 'polling' | null;
 type AudioSource = 'tts' | 'upload';
 type PortraitSource = 'ai' | 'upload';
 
@@ -103,6 +103,8 @@ interface AvatarState {
   portraitError: string | null;
   portraitImageUrl: string | null;
   videoStep: VideoStep;
+  videoRequestId: string | null;
+  videoPollElapsed: number;
   videoError: string | null;
   videoUrl: string | null;
 }
@@ -125,6 +127,8 @@ function AvatarTestSection({
     portraitError: null,
     portraitImageUrl: null,
     videoStep: null,
+    videoRequestId: null,
+    videoPollElapsed: 0,
     videoError: null,
     videoUrl: null,
   });
@@ -253,17 +257,16 @@ function AvatarTestSection({
     } finally {
       patch({ isGeneratingPortrait: false });
     }
-
   };
 
-  // ── Generate voice + video ───────────────────────────────────────────────
+  // ── Submit video job, then poll for completion ───────────────────────────
   const handleGenerateVideo = async () => {
     if (!state.portraitImageUrl) return;
 
     let targetAudioUrl = state.audioUrl;
 
     if (state.audioSource === 'tts') {
-      patch({ videoStep: 'audio', videoError: null, videoUrl: null });
+      patch({ videoStep: 'audio', videoError: null, videoUrl: null, videoRequestId: null, videoPollElapsed: 0 });
 
       try {
         const audioRes = await fetch('/api/generate-audio-snippet', {
@@ -288,10 +291,10 @@ function AvatarTestSection({
         patch({ videoError: 'Vänligen ladda upp en ljudfil först.' });
         return;
       }
-      patch({ videoStep: 'video', videoError: null, videoUrl: null });
     }
 
-    patch({ videoStep: 'video' });
+    // Submit video job (async — returns requestId immediately)
+    patch({ videoStep: 'submit', videoError: null, videoUrl: null, videoRequestId: null, videoPollElapsed: 0 });
 
     try {
       const videoRes = await fetch('/api/generate-video-snippet', {
@@ -302,28 +305,64 @@ function AvatarTestSection({
           audioUrl: targetAudioUrl,
         }),
       });
-      const videoData = (await videoRes.json()) as { videoUrl?: string; debug?: string } & Partial<ApiError>;
+      const videoData = (await videoRes.json()) as { requestId?: string; error?: string };
       if (!videoRes.ok || videoData.error) {
-        patch({ videoStep: null, videoError: videoData.error ?? 'Okänt fel vid videogenerering.' });
+        patch({ videoStep: null, videoError: videoData.error ?? 'Okänt fel vid videoinlämning.' });
         return;
       }
-      patch({ videoUrl: videoData.videoUrl ?? null });
+      // Start polling
+      patch({ videoStep: 'polling', videoRequestId: videoData.requestId ?? null, videoPollElapsed: 0 });
     } catch {
       patch({ videoStep: null, videoError: 'Kunde inte nå /api/generate-video-snippet.' });
-    } finally {
-      patch({ videoStep: null });
     }
   };
+
+  // Poll video job status every 3 seconds while in 'polling' step
+  useEffect(() => {
+    if (state.videoStep !== 'polling' || !state.videoRequestId) return;
+
+    const startTime = Date.now();
+    const interval = setInterval(async () => {
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      setState((prev) => ({ ...prev, videoPollElapsed: elapsed }));
+
+      try {
+        const res = await fetch(`/api/generate-video-snippet?requestId=${state.videoRequestId}`);
+        const data = (await res.json()) as { status: string; videoUrl?: string; error?: string };
+
+        if (data.status === 'COMPLETED') {
+          clearInterval(interval);
+          setState((prev) => ({ ...prev, videoStep: null, videoUrl: data.videoUrl ?? null }));
+        } else if (data.status === 'FAILED') {
+          clearInterval(interval);
+          setState((prev) => ({
+            ...prev,
+            videoStep: null,
+            videoError: data.error ?? 'Videogenerering misslyckades.',
+          }));
+        }
+        // IN_PROGRESS: keep polling
+      } catch {
+        // Network hiccup — keep trying
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.videoStep, state.videoRequestId]);
 
   const isGeneratingVideo = state.videoStep !== null;
   const videoStepLabel =
     state.videoStep === 'audio'
       ? 'Genererar röst…'
-      : state.videoStep === 'video'
-      ? 'Genererar video… (kan ta upp till en minut)'
+      : state.videoStep === 'submit'
+      ? 'Skickar in videojobb…'
+      : state.videoStep === 'polling'
+      ? `Genererar video… (${state.videoPollElapsed}s)`
       : null;
 
   return (
+
     <div className="border-t border-zinc-800 bg-zinc-950/30 p-5 sm:p-6 space-y-5">
       {/* Section header */}
       <div className="flex items-center gap-2">
