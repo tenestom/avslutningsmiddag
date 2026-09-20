@@ -103,7 +103,7 @@ interface AvatarState {
   portraitError: string | null;
   portraitImageUrl: string | null;
   videoStep: VideoStep;
-  videoRequestId: string | null;
+  videoId: string | null;
   videoPollElapsed: number;
   videoError: string | null;
   videoUrl: string | null;
@@ -127,7 +127,7 @@ function AvatarTestSection({
     portraitError: null,
     portraitImageUrl: null,
     videoStep: null,
-    videoRequestId: null,
+    videoId: null,
     videoPollElapsed: 0,
     videoError: null,
     videoUrl: null,
@@ -266,7 +266,7 @@ function AvatarTestSection({
     let targetAudioUrl = state.audioUrl;
 
     if (state.audioSource === 'tts') {
-      patch({ videoStep: 'audio', videoError: null, videoUrl: null, videoRequestId: null, videoPollElapsed: 0 });
+      patch({ videoStep: 'audio', videoError: null, videoUrl: null, videoId: null, videoPollElapsed: 0 });
 
       try {
         const audioRes = await fetch('/api/generate-audio-snippet', {
@@ -293,8 +293,8 @@ function AvatarTestSection({
       }
     }
 
-    // Submit video job (async — returns requestId immediately)
-    patch({ videoStep: 'submit', videoError: null, videoUrl: null, videoRequestId: null, videoPollElapsed: 0 });
+    // Submit video job (async — returns videoId immediately)
+    patch({ videoStep: 'submit', videoError: null, videoUrl: null, videoId: null, videoPollElapsed: 0 });
 
     try {
       const videoRes = await fetch('/api/generate-video-snippet', {
@@ -305,13 +305,13 @@ function AvatarTestSection({
           audioUrl: targetAudioUrl,
         }),
       });
-      const videoData = (await videoRes.json()) as { requestId?: string; error?: string };
+      const videoData = (await videoRes.json()) as { videoId?: string; error?: string };
       if (!videoRes.ok || videoData.error) {
         patch({ videoStep: null, videoError: videoData.error ?? 'Okänt fel vid videoinlämning.' });
         return;
       }
       // Start polling
-      patch({ videoStep: 'polling', videoRequestId: videoData.requestId ?? null, videoPollElapsed: 0 });
+      patch({ videoStep: 'polling', videoId: videoData.videoId ?? null, videoPollElapsed: 0 });
     } catch {
       patch({ videoStep: null, videoError: 'Kunde inte nå /api/generate-video-snippet.' });
     }
@@ -319,7 +319,7 @@ function AvatarTestSection({
 
   // Poll video job status every 3 seconds while in 'polling' step
   useEffect(() => {
-    if (state.videoStep !== 'polling' || !state.videoRequestId) return;
+    if (state.videoStep !== 'polling' || !state.videoId) return;
 
     const startTime = Date.now();
     const interval = setInterval(async () => {
@@ -327,7 +327,7 @@ function AvatarTestSection({
       setState((prev) => ({ ...prev, videoPollElapsed: elapsed }));
 
       try {
-        const res = await fetch(`/api/generate-video-snippet?requestId=${state.videoRequestId}`);
+        const res = await fetch(`/api/generate-video-snippet?videoId=${state.videoId}`);
         const data = (await res.json()) as { status: string; videoUrl?: string; error?: string };
 
         if (data.status === 'COMPLETED') {
@@ -349,7 +349,7 @@ function AvatarTestSection({
 
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.videoStep, state.videoRequestId]);
+  }, [state.videoStep, state.videoId]);
 
   const isGeneratingVideo = state.videoStep !== null;
   const videoStepLabel =

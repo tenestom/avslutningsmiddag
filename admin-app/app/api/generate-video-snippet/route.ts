@@ -1,35 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fal } from '@fal-ai/client';
+import { uploadAssetToHeyGen, createHeygenVideo, getHeygenVideoStatus } from '@shared/heygenClient';
 
 // ---------------------------------------------------------------------------
-// Helper: convert a base64 data URL to a File object for fal.storage.upload
-// ---------------------------------------------------------------------------
-function dataUrlToFile(dataUrl: string, filename: string): File {
-  const [header, base64Data] = dataUrl.split(',');
-  const mimeType = header.match(/data:([^;]+)/)?.[1] ?? 'application/octet-stream';
-  const byteArray = Buffer.from(base64Data, 'base64');
-  const blob = new Blob([byteArray], { type: mimeType });
-  return new File([blob], filename, { type: mimeType });
-}
-
-// fal.ai result shape for fal-ai/ltx-2-19b/audio-to-video
-interface FalVideoOutput {
-  video: { url: string };
-}
-
-// ---------------------------------------------------------------------------
-// POST — upload media to fal storage, submit job to fal.queue, return requestId
+// POST — upload image + audio to HeyGen, submit video job, return videoId
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    const falKey = process.env.FAL_KEY;
-    if (!falKey) {
+    const apiKey = process.env.HEYGEN_API_KEY;
+    if (!apiKey) {
       return NextResponse.json(
-        { error: 'FAL_KEY är inte konfigurerad på servern. Lägg till den i .env.local och starta om servern.' },
+        { error: 'HEYGEN_API_KEY är inte konfigurerad på servern. Lägg till den i .env.local och starta om servern.' },
         { status: 500 }
       );
     }
-    fal.config({ credentials: falKey });
 
     let body: { imageUrl: string; audioUrl: string };
     try {
@@ -52,55 +35,45 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    // Upload image to fal storage
-    let uploadedImageUrl: string;
+    // Upload image and audio assets to HeyGen
+    let imageAssetId: string;
     try {
-      uploadedImageUrl = await fal.storage.upload(dataUrlToFile(imageUrl, 'portrait.png'));
-    } catch (uploadError: unknown) {
-      console.error('fal.storage.upload (image) error:', uploadError);
-      const message = uploadError instanceof Error ? uploadError.message : 'Okänt fel';
+      imageAssetId = await uploadAssetToHeyGen(imageUrl, apiKey);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Okänt fel';
+      console.error('HeyGen image upload error:', msg);
       return NextResponse.json(
-        { error: `Misslyckades med att ladda upp bild till fal.ai: ${message}` },
+        { error: `Bilduppladdning till HeyGen misslyckades: ${msg}` },
         { status: 502 }
       );
     }
 
-    // Upload audio to fal storage
-    let uploadedAudioUrl: string;
+    let audioAssetId: string;
     try {
-      uploadedAudioUrl = await fal.storage.upload(dataUrlToFile(audioUrl, 'audio.wav'));
-    } catch (uploadError: unknown) {
-      console.error('fal.storage.upload (audio) error:', uploadError);
-      const message = uploadError instanceof Error ? uploadError.message : 'Okänt fel';
+      audioAssetId = await uploadAssetToHeyGen(audioUrl, apiKey);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Okänt fel';
+      console.error('HeyGen audio upload error:', msg);
       return NextResponse.json(
-        { error: `Misslyckades med att ladda upp ljud till fal.ai: ${message}` },
+        { error: `Ljuduppladdning till HeyGen misslyckades: ${msg}` },
         { status: 502 }
       );
     }
 
-    // Submit to fal.queue (non-blocking — returns requestId immediately)
-    let submitted: { request_id: string };
+    // Submit video job — 720p for snippet previews (fast, good quality)
+    let videoId: string;
     try {
-      submitted = await fal.queue.submit('fal-ai/ltx-2-19b/audio-to-video', {
-        input: {
-          prompt:
-            'A person speaking directly and expressively to the camera, mouth moving naturally in sync with speech, animated facial expressions, natural head movement and blinking, engaged and lively delivery.',
-          audio_url: uploadedAudioUrl,
-          image_url: uploadedImageUrl,
-          match_audio_length: true,
-        },
-      });
-    } catch (e: any) {
-      console.error('fal.queue.submit error:', JSON.stringify(e?.body, null, 2));
-      const msg = e instanceof Error ? e.message : 'Okänt fal.ai-fel';
-      const debug = e?.body?.detail ? JSON.stringify(e.body.detail, null, 2) : undefined;
+      videoId = await createHeygenVideo({ imageAssetId, audioAssetId, resolution: '720p', apiKey });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Okänt HeyGen-fel';
+      console.error('HeyGen createVideo error:', msg);
       return NextResponse.json(
-        { error: `Videojobb kunde inte skickas in: ${msg}`, debug },
+        { error: `Videojobb kunde inte skapas hos HeyGen: ${msg}` },
         { status: 502 }
       );
     }
 
-    return NextResponse.json({ requestId: submitted.request_id });
+    return NextResponse.json({ videoId });
   } catch (error: unknown) {
     console.error('Unexpected error in POST /api/generate-video-snippet:', error);
     const message = error instanceof Error ? error.message : 'Okänt fel';
@@ -109,59 +82,52 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// GET ?requestId=xxx — poll job status; on COMPLETED, fetch and return video URL
+// GET ?videoId=xxx — poll HeyGen job status; map to normalised status shape
 // ---------------------------------------------------------------------------
 export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
-    const falKey = process.env.FAL_KEY;
-    if (!falKey) {
-      return NextResponse.json({ error: 'FAL_KEY är inte konfigurerad.' }, { status: 500 });
-    }
-    fal.config({ credentials: falKey });
-
-    const requestId = req.nextUrl.searchParams.get('requestId');
-    if (!requestId) {
-      return NextResponse.json({ error: 'requestId saknas i URL-parametern.' }, { status: 400 });
+    const apiKey = process.env.HEYGEN_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: 'HEYGEN_API_KEY är inte konfigurerad.' }, { status: 500 });
     }
 
-    let queueStatus: { status: string };
+    const videoId = req.nextUrl.searchParams.get('videoId');
+    if (!videoId) {
+      return NextResponse.json({ error: 'videoId saknas i URL-parametern.' }, { status: 400 });
+    }
+
+    let heygenStatus: Awaited<ReturnType<typeof getHeygenVideoStatus>>;
     try {
-      queueStatus = await fal.queue.status('fal-ai/ltx-2-19b/audio-to-video', { requestId });
-    } catch (e: any) {
-      console.error('fal.queue.status error:', JSON.stringify(e?.body, null, 2));
+      heygenStatus = await getHeygenVideoStatus(videoId, apiKey);
+    } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Okänt fel';
+      console.error('HeyGen status check error:', msg);
       return NextResponse.json(
         { status: 'FAILED', error: `Statuskontroll misslyckades: ${msg}` },
         { status: 502 }
       );
     }
 
-    const status = queueStatus.status; // "IN_QUEUE" | "IN_PROGRESS" | "COMPLETED"
-
-    if (status === 'COMPLETED') {
-      let result: { data: FalVideoOutput };
-      try {
-        result = (await fal.queue.result('fal-ai/ltx-2-19b/audio-to-video', { requestId })) as {
-          data: FalVideoOutput;
-        };
-      } catch (e: any) {
-        console.error('fal.queue.result error:', JSON.stringify(e?.body, null, 2));
-        const msg = e instanceof Error ? e.message : 'Okänt fel';
-        return NextResponse.json({ status: 'FAILED', error: `Resultathämtning misslyckades: ${msg}` });
-      }
-
-      const videoUrl = result?.data?.video?.url;
+    // Map HeyGen statuses → our normalised values
+    if (heygenStatus.status === 'completed') {
+      const videoUrl = heygenStatus.video_url;
       if (!videoUrl) {
         return NextResponse.json({
           status: 'FAILED',
-          error: 'fal.ai returnerade inget video-URL i resultatet.',
+          error: 'HeyGen returnerade inget video-URL i resultatet.',
         });
       }
-
       return NextResponse.json({ status: 'COMPLETED', videoUrl });
     }
 
-    // IN_QUEUE or IN_PROGRESS — client should keep polling
+    if (heygenStatus.status === 'failed') {
+      return NextResponse.json({
+        status: 'FAILED',
+        error: heygenStatus.failure_message ?? 'Videogenerering misslyckades hos HeyGen.',
+      });
+    }
+
+    // 'pending' | 'processing' → keep polling
     return NextResponse.json({ status: 'IN_PROGRESS' });
   } catch (error: unknown) {
     console.error('Unexpected error in GET /api/generate-video-snippet:', error);

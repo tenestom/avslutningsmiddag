@@ -101,7 +101,7 @@ interface AvatarState {
   portraitError: string | null;
   portraitImageUrl: string | null;
   videoStep: VideoStep;
-  videoRequestId: string | null;
+  videoId: string | null;
   videoPollElapsed: number;
   videoError: string | null;
   videoUrl: string | null;
@@ -125,7 +125,7 @@ function AvatarTestSection({
     portraitError: null,
     portraitImageUrl: null,
     videoStep: null,
-    videoRequestId: null,
+    videoId: null,
     videoPollElapsed: 0,
     videoError: null,
     videoUrl: null,
@@ -230,7 +230,7 @@ function AvatarTestSection({
     let targetAudioUrl = state.audioUrl;
 
     if (state.audioSource === 'tts') {
-      patch({ videoStep: 'audio', videoError: null, videoUrl: null, videoRequestId: null, videoPollElapsed: 0 });
+      patch({ videoStep: 'audio', videoError: null, videoUrl: null, videoId: null, videoPollElapsed: 0 });
       try {
         const audioRes = await fetch('/api/generate-audio-snippet', {
           method: 'POST',
@@ -255,21 +255,21 @@ function AvatarTestSection({
       }
     }
 
-    // Submit video job (async — returns requestId immediately)
-    patch({ videoStep: 'submit', videoError: null, videoUrl: null, videoRequestId: null, videoPollElapsed: 0 });
+    // Submit video job (async — returns videoId immediately)
+    patch({ videoStep: 'submit', videoError: null, videoUrl: null, videoId: null, videoPollElapsed: 0 });
     try {
       const videoRes = await fetch('/api/generate-video-snippet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageUrl: state.portraitImageUrl, audioUrl: targetAudioUrl }),
       });
-      const videoData = (await videoRes.json()) as { requestId?: string; error?: string };
+      const videoData = (await videoRes.json()) as { videoId?: string; error?: string };
       if (!videoRes.ok || videoData.error) {
         patch({ videoStep: null, videoError: videoData.error ?? 'Okänt fel vid videoinlämning.' });
         return;
       }
       // Start polling
-      patch({ videoStep: 'polling', videoRequestId: videoData.requestId ?? null, videoPollElapsed: 0 });
+      patch({ videoStep: 'polling', videoId: videoData.videoId ?? null, videoPollElapsed: 0 });
     } catch {
       patch({ videoStep: null, videoError: 'Kunde inte nå /api/generate-video-snippet.' });
     }
@@ -277,7 +277,7 @@ function AvatarTestSection({
 
   // Poll video job status every 3 seconds while in 'polling' step
   useEffect(() => {
-    if (state.videoStep !== 'polling' || !state.videoRequestId) return;
+    if (state.videoStep !== 'polling' || !state.videoId) return;
 
     const startTime = Date.now();
     const interval = setInterval(async () => {
@@ -285,7 +285,7 @@ function AvatarTestSection({
       setState((prev) => ({ ...prev, videoPollElapsed: elapsed }));
 
       try {
-        const res = await fetch(`/api/generate-video-snippet?requestId=${state.videoRequestId}`);
+        const res = await fetch(`/api/generate-video-snippet?videoId=${state.videoId}`);
         const data = (await res.json()) as { status: string; videoUrl?: string; error?: string };
 
         if (data.status === 'COMPLETED') {
@@ -307,7 +307,7 @@ function AvatarTestSection({
 
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.videoStep, state.videoRequestId]);
+  }, [state.videoStep, state.videoId]);
 
   const isGeneratingVideo = state.videoStep !== null;
   const videoStepLabel =
@@ -534,41 +534,34 @@ function AvatarTestSection({
 // Resolution picker + full-length video generation
 // ---------------------------------------------------------------------------
 
+// HeyGen Avatar IV Photo Avatar resolution tiers
+// Pricing: flat $0.05 per second of output video, regardless of resolution.
 const RESOLUTIONS = [
   {
-    value: 'landscape_16_9',
-    label: 'Landskap 16:9',
-    description: 'Widescreen — passar projektor och skärm',
-    width: 1024,
-    height: 576,
-    fps: 24,
+    value: '720p',
+    label: '720p HD',
+    description: 'Snabbare rendering — bra för test och presentation',
   },
   {
-    value: 'portrait_4_3',
-    label: 'Porträtt 4:3',
-    description: 'Talarhuvud — bäst för närbild av persona',
-    width: 768,
-    height: 1024,
-    fps: 24,
+    value: '1080p',
+    label: '1080p Full HD',
+    description: 'Skarp kvalitet — rekommenderas för slutresultat',
   },
   {
-    value: 'square_hd',
-    label: 'Kvadrat HD',
-    description: 'Kvadratisk 1024×1024 — maximal detaljnivå',
-    width: 1024,
-    height: 1024,
-    fps: 24,
+    value: '4k',
+    label: '4K Ultra HD',
+    description: 'Högsta bildkvalitet — tar något längre tid',
   },
 ] as const;
 
 type ResolutionValue = (typeof RESOLUTIONS)[number]['value'];
 
-function computeCost(width: number, height: number, fps: number, durationSeconds: number): string {
-  const totalFrames = fps * durationSeconds;
-  const megapixels = (width * height / 1_000_000) * totalFrames;
-  const cost = megapixels * 0.0018;
+// HeyGen: flat $0.05 per second, resolution only affects quality
+function computeCost(durationSeconds: number): string {
+  const cost = durationSeconds * 0.05;
   return `$${cost.toFixed(2)}`;
 }
+
 
 interface FullVideoSectionProps {
   speechScript: string;
@@ -595,7 +588,7 @@ interface FullVideoState {
   audioUrl: string | null;
   durationSeconds: number | null;
   selectedResolution: ResolutionValue;
-  requestId: string | null;
+  videoId: string | null;
   videoUrl: string | null;
   pollElapsed: number;
   isSaving: boolean;
@@ -611,8 +604,8 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
     voiceName: 'Kore',
     audioUrl: null,
     durationSeconds: null,
-    selectedResolution: 'portrait_4_3',
-    requestId: null,
+    selectedResolution: '1080p',
+    videoId: null,
     videoUrl: null,
     pollElapsed: 0,
     isSaving: false,
@@ -722,12 +715,12 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
           resolution: state.selectedResolution,
         }),
       });
-      const data = await res.json() as { requestId?: string; error?: string };
+      const data = await res.json() as { videoId?: string; error?: string };
       if (!res.ok || data.error) {
         patch({ step: 'error', error: data.error ?? 'Okänt fel vid videoinlämning.' });
         return;
       }
-      patch({ step: 'polling', requestId: data.requestId ?? null, pollElapsed: 0 });
+      patch({ step: 'polling', videoId: data.videoId ?? null, pollElapsed: 0 });
     } catch {
       patch({ step: 'error', error: 'Kunde inte nå /api/generate-full-video.' });
     }
@@ -735,7 +728,7 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
 
   // Step 4: Poll status every 5 seconds
   useEffect(() => {
-    if (state.step !== 'polling' || !state.requestId) return;
+    if (state.step !== 'polling' || !state.videoId) return;
 
     const startTime = Date.now();
     pollRef.current = setInterval(async () => {
@@ -743,7 +736,7 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
       setState((prev) => ({ ...prev, pollElapsed: elapsed }));
 
       try {
-        const res = await fetch(`/api/generate-full-video?requestId=${state.requestId}`);
+        const res = await fetch(`/api/generate-full-video?videoId=${state.videoId}`);
         const data = await res.json() as { status: string; videoUrl?: string; error?: string };
 
         if (data.status === 'COMPLETED') {
@@ -761,7 +754,7 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
 
     return () => stopPolling();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.step, state.requestId]);
+  }, [state.step, state.videoId]);
 
   // Step 5: Save final video to KV
   const handleSaveVideo = async () => {
@@ -923,6 +916,9 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4 space-y-2">
             <p className="text-sm text-zinc-300 font-medium">
               ✓ Röst klar — <span className="text-amber-400">{state.durationSeconds} sekunder</span>
+              {' · '}
+              <span className="text-amber-400 font-bold">Beräknad kostnad: {computeCost(state.durationSeconds)}</span>
+              <span className="text-zinc-500 text-xs ml-1">(HeyGen $0.05/s)</span>
             </p>
             {state.audioUrl && <audio src={state.audioUrl} controls className="w-full h-8" />}
           </div>
@@ -930,9 +926,9 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
           {/* Resolution picker */}
           <div className="space-y-2">
             <label className="block text-xs font-semibold text-zinc-400">Välj upplösning</label>
+            <p className="text-xs text-zinc-500">Upplösningen påverkar bara bildkvaliteten, inte priset.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {RESOLUTIONS.map((res) => {
-                const cost = computeCost(res.width, res.height, res.fps, state.durationSeconds!);
                 const isSelected = state.selectedResolution === res.value;
                 return (
                   <button
@@ -946,14 +942,8 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
                         : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-700'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-zinc-200">{res.label}</span>
-                      <span className={`text-sm font-bold ${isSelected ? 'text-amber-400' : 'text-zinc-400'}`}>
-                        {cost}
-                      </span>
-                    </div>
+                    <span className="text-sm font-semibold text-zinc-200">{res.label}</span>
                     <p className="text-xs text-zinc-500">{res.description}</p>
-                    <p className="text-xs text-zinc-600">{res.width}×{res.height} @ {res.fps}fps</p>
                   </button>
                 );
               })}
@@ -966,7 +956,7 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
               onClick={handleConfirm}
               className="rounded-xl bg-red-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-500"
             >
-              Generera video i {selectedRes.label} för {computeCost(selectedRes.width, selectedRes.height, selectedRes.fps, state.durationSeconds!)} →
+              Generera video i {selectedRes.label} för {computeCost(state.durationSeconds)} →
             </button>
           )}
 
@@ -974,11 +964,11 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
           {state.step === 'confirming' && (
             <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 space-y-3">
               <p className="text-sm font-semibold text-red-300">
-                Generera video i <strong>{selectedRes.label}</strong> ({selectedRes.width}×{selectedRes.height}) för{' '}
+                Generera video i <strong>{selectedRes.label}</strong> för{' '}
                 <strong className="text-amber-400">
-                  {computeCost(selectedRes.width, selectedRes.height, selectedRes.fps, state.durationSeconds!)}
+                  {computeCost(state.durationSeconds)}
                 </strong>?
-                {' '}Videogenerering faktureras direkt mot ditt fal.ai-konto.
+                {' '}Videogenerering faktureras direkt mot ditt HeyGen-konto ($0.05/s).
               </p>
               <div className="flex gap-3">
                 <button
@@ -1003,9 +993,10 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
       {state.step === 'submitting' && (
         <div className="flex items-center gap-3 text-sm text-zinc-400">
           <Spinner className="h-4 w-4" />
-          <span>Laddar upp och skickar in videojobb till fal.ai…</span>
+          <span>Laddar upp och skickar in videojobb till HeyGen…</span>
         </div>
       )}
+
 
       {/* Polling */}
       {state.step === 'polling' && (
@@ -1054,7 +1045,7 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
         <div className="space-y-3">
           <ErrorAlert message={state.error} />
           <button
-            onClick={() => patch({ step: 'idle', error: null, uploadError: null, audioUrl: null, durationSeconds: null, requestId: null, videoUrl: null })}
+            onClick={() => patch({ step: 'idle', error: null, uploadError: null, audioUrl: null, durationSeconds: null, videoId: null, videoUrl: null })}
             className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
           >
             Börja om
