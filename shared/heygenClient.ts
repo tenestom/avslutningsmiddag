@@ -12,9 +12,15 @@
 // ---------------------------------------------------------------------------
 
 interface HeyGenUploadResponse {
-  code: number;
-  data: { asset_id: string; url?: string };
+  code?: number;
+  data?: {
+    asset_id?: string;
+    mime_type?: string;
+    size_bytes?: number;
+    url?: string;
+  };
   message?: string;
+  error?: string | Record<string, unknown>;
 }
 
 interface HeyGenVideoCreateResponse {
@@ -79,18 +85,15 @@ export async function uploadAssetToHeyGen(dataUrl: string, apiKey: string): Prom
 
   const json = (await res.json()) as HeyGenUploadResponse;
 
-  if (!res.ok || json.code !== 100) {
+  if (!res.ok || !json?.data?.asset_id) {
+    console.error('HeyGen asset upload failed response:', JSON.stringify(json, null, 2));
     throw new Error(
-      `HeyGen asset upload failed (HTTP ${res.status}): ${json.message ?? JSON.stringify(json)}`
+      `HeyGen asset upload failed (HTTP ${res.status}): ${json?.message ?? (typeof json?.error === 'string' ? json.error : JSON.stringify(json))}`
     );
   }
 
-  const assetId = json.data?.asset_id;
-  if (!assetId) {
-    throw new Error(`HeyGen asset upload: missing asset_id in response: ${JSON.stringify(json)}`);
-  }
-
-  return assetId;
+  console.log('HeyGen asset upload success response:', JSON.stringify(json, null, 2));
+  return json.data.asset_id;
 }
 
 // ---------------------------------------------------------------------------
