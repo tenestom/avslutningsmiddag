@@ -24,22 +24,29 @@ interface HeyGenUploadResponse {
 }
 
 interface HeyGenVideoCreateResponse {
-  code: number;
-  data: { video_id: string };
+  code?: number;
+  data?: {
+    video_id?: string;
+    status?: string;
+    output_format?: string;
+  };
   message?: string;
+  error?: string | Record<string, unknown>;
 }
 
 export interface HeyGenVideoStatus {
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | string;
   video_url?: string;
   failure_message?: string;
 }
 
 interface HeyGenVideoStatusResponse {
-  code: number;
-  data: HeyGenVideoStatus;
+  code?: number;
+  data?: HeyGenVideoStatus;
   message?: string;
+  error?: string | Record<string, unknown>;
 }
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -131,20 +138,15 @@ export async function createHeygenVideo({
 
   const json = (await res.json()) as HeyGenVideoCreateResponse;
 
-  if (!res.ok || json.code !== 100) {
+  if (!res.ok || !json?.data?.video_id) {
+    console.error('HeyGen video creation failed response:', JSON.stringify(json, null, 2));
     throw new Error(
-      `HeyGen video creation failed (HTTP ${res.status}): ${json.message ?? JSON.stringify(json)}`
+      `HeyGen video creation failed (HTTP ${res.status}): ${json?.message ?? (typeof json?.error === 'string' ? json.error : JSON.stringify(json))}`
     );
   }
 
-  const videoId = json.data?.video_id;
-  if (!videoId) {
-    throw new Error(
-      `HeyGen video creation: missing video_id in response: ${JSON.stringify(json)}`
-    );
-  }
-
-  return videoId;
+  console.log('HeyGen video creation success response:', JSON.stringify(json, null, 2));
+  return json.data.video_id;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,9 +165,10 @@ export async function getHeygenVideoStatus(
 
   const json = (await res.json()) as HeyGenVideoStatusResponse;
 
-  if (!res.ok || json.code !== 100) {
+  if (!res.ok || !json?.data?.status) {
+    console.error('HeyGen status check failed response:', JSON.stringify(json, null, 2));
     throw new Error(
-      `HeyGen status check failed (HTTP ${res.status}): ${json.message ?? JSON.stringify(json)}`
+      `HeyGen status check failed (HTTP ${res.status}): ${json?.message ?? (typeof json?.error === 'string' ? json.error : JSON.stringify(json))}`
     );
   }
 
