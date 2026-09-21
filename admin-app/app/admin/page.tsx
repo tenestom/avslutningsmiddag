@@ -311,6 +311,7 @@ function SnippetTestSection({
   const [audioSource, setAudioSource] = useState<AudioSource>('tts');
   const [snippetText, setSnippetText] = useState(() => getFirstTwoSentences(result.speechScript));
   const [voiceName, setVoiceName] = useState('Kore');
+  const [styleInstructions, setStyleInstructions] = useState('');
   const [audioStep, setAudioStep] = useState<SnippetAudioStep>('idle');
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
@@ -361,7 +362,7 @@ function SnippetTestSection({
       const res = await fetch('/api/generate-audio-snippet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: snippetText, voiceName }),
+        body: JSON.stringify({ text: snippetText, voiceName, styleInstructions: styleInstructions.trim() || undefined }),
       });
       const data = (await res.json()) as { audioUrl?: string } & Partial<ApiError>;
       if (!res.ok || data.error) {
@@ -507,6 +508,19 @@ function SnippetTestSection({
                 <label className="block text-xs font-semibold text-zinc-400">Röst</label>
                 <VoiceSelect value={voiceName} onChange={setVoiceName} accent="amber" />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-zinc-400">
+                Stilinstruktion{' '}
+                <span className="font-normal text-zinc-600">(valfritt)</span>
+              </label>
+              <input
+                type="text"
+                value={styleInstructions}
+                onChange={(e) => setStyleInstructions(e.target.value)}
+                placeholder="t.ex. skånsk dialekt, långsamt tempo, allvarlig ton"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+              />
             </div>
             {audioStep === 'idle' && (
               <button
@@ -698,6 +712,7 @@ function FullVideoSection({
   // Steg 1
   const [audioSource, setAudioSource] = useState<AudioSource>('tts');
   const [voiceName, setVoiceName] = useState('Kore');
+  const [styleInstructions, setStyleInstructions] = useState('');
   const [audioStep, setAudioStep] = useState<AudioGenStep>('idle');
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [durationSeconds, setDurationSeconds] = useState<number | null>(null);
@@ -760,7 +775,7 @@ function FullVideoSection({
       const res = await fetch('/api/generate-full-audio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: speechScript, voiceName }),
+        body: JSON.stringify({ text: speechScript, voiceName, styleInstructions: styleInstructions.trim() || undefined }),
       });
       const data = await res.json() as { audioUrl?: string; durationSeconds?: number; error?: string };
       if (!res.ok || data.error) {
@@ -906,6 +921,19 @@ function FullVideoSection({
             <div className="space-y-1.5 sm:w-52">
               <label className="block text-xs font-semibold text-zinc-400">Röst</label>
               <VoiceSelect value={voiceName} onChange={setVoiceName} accent="red" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-zinc-400">
+                Stilinstruktion{' '}
+                <span className="font-normal text-zinc-600">(valfritt)</span>
+              </label>
+              <input
+                type="text"
+                value={styleInstructions}
+                onChange={(e) => setStyleInstructions(e.target.value)}
+                placeholder="t.ex. skånsk dialekt, långsamt tempo, allvarlig ton"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-red-500/30"
+              />
             </div>
             {audioStep === 'idle' && (
               <button

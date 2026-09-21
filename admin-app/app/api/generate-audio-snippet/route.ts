@@ -32,14 +32,14 @@ function pcmToWav(pcmData: Buffer, sampleRate = 24000, numChannels = 1, bitsPerS
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     // 1. Parse request body
-    let body: { text: string; voiceName?: string };
+    let body: { text: string; voiceName?: string; styleInstructions?: string };
     try {
-      body = (await req.json()) as { text: string; voiceName?: string };
+      body = (await req.json()) as { text: string; voiceName?: string; styleInstructions?: string };
     } catch {
       return NextResponse.json({ error: 'Invalid JSON in request body.' }, { status: 400 });
     }
 
-    const { text, voiceName = 'Kore' } = body;
+    const { text, voiceName = 'Kore', styleInstructions } = body;
     if (!text?.trim()) {
       return NextResponse.json({ error: 'text saknas i anropet.' }, { status: 400 });
     }
@@ -54,8 +54,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     // 3. Call Gemini TTS
+    // styleInstructions is passed as systemInstruction — the documented way to influence
+    // delivery style/dialect without the instruction being spoken aloud as literal text.
     const genAI = new GoogleGenerativeAI(geminiApiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-tts-preview' });
+    const modelOptions: Parameters<typeof genAI.getGenerativeModel>[0] = {
+      model: 'gemini-3.1-flash-tts-preview',
+      ...(styleInstructions?.trim()
+        ? { systemInstruction: styleInstructions.trim() }
+        : {}),
+    };
+    const model = genAI.getGenerativeModel(modelOptions);
 
     let result;
     try {
