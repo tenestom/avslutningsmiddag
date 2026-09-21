@@ -1,9 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import type { Speech } from '@shared';
 import { setSpeech as kvSetSpeech } from '@shared';
-
 
 // ---------------------------------------------------------------------------
 // Types
@@ -22,7 +20,7 @@ interface ApiError {
 }
 
 // ---------------------------------------------------------------------------
-// Utility helpers (same as /test)
+// Utility helpers
 // ---------------------------------------------------------------------------
 
 function getFirstTwoSentences(text: string): string {
@@ -31,11 +29,10 @@ function getFirstTwoSentences(text: string): string {
   return snippet || text.slice(0, 300).trim();
 }
 
-function estimateCost(text: string): string {
-  const seconds = Math.max(3, Math.round(text.length / 15));
-  const low = (seconds * 0.02).toFixed(2);
-  const high = (seconds * 0.04).toFixed(2);
-  return `$${low}–$${high}`;
+// HeyGen Avatar IV Photo Avatar: $0.0385/sec
+function computeCost(durationSeconds: number): string {
+  const cost = durationSeconds * 0.0385;
+  return `$${cost.toFixed(2)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,24 +79,230 @@ function ErrorAlert({ message }: { message: string }) {
   );
 }
 
+function VoiceSelect({
+  value,
+  onChange,
+  accent,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  accent: 'amber' | 'red';
+}) {
+  const ring = accent === 'amber' ? 'focus:ring-amber-500/30' : 'focus:ring-red-500/30';
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={`w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5 text-sm text-zinc-200 transition focus:border-zinc-700 focus:outline-none focus:ring-2 ${ring}`}
+    >
+      <option value="Kore">Kore (kvinna, bestämd)</option>
+      <option value="Puck">Puck (man, pigg)</option>
+      <option value="Charon">Charon (man, informativ)</option>
+      <option value="Aoede">Aoede (kvinna, lätt)</option>
+      <option value="Orus">Orus (man, bestämd)</option>
+      <option value="Leda">Leda (kvinna, ungdomlig)</option>
+    </select>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Avatar test section (same pattern as /test, but tied to one result)
+// SHARED PORTRAIT SECTION (top-level, persisted)
+// ---------------------------------------------------------------------------
+
+type PortraitSource = 'ai' | 'upload';
+
+function PortraitSection({
+  portraitPrompt,
+  portraitImageUrl,
+  onPortraitChange,
+  sectionId,
+}: {
+  portraitPrompt: string;
+  portraitImageUrl: string | null;
+  onPortraitChange: (url: string) => void;
+  sectionId?: string;
+}) {
+  const [source, setSource] = useState<PortraitSource>(portraitImageUrl ? 'upload' : 'ai');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    if (file.size > 10 * 1024 * 1024) {
+      setError(`Bilden är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Max 10 MB.`);
+      return;
+    }
+    const validExt = ['.jpg', '.jpeg', '.png', '.webp'];
+    const validMime = ['image/jpeg', 'image/png', 'image/webp'];
+    const name = file.name.toLowerCase();
+    if (!validExt.some((ext) => name.endsWith(ext)) || !validMime.includes(file.type)) {
+      setError('Ogiltigt filformat. Endast JPEG, PNG och WebP accepteras.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        onPortraitChange(reader.result);
+        setError(null);
+      }
+    };
+    reader.onerror = () => setError('Ett fel uppstod vid inläsning av bilden.');
+    reader.readAsDataURL(file);
+  };
+
+  const handleGeneratePortrait = async () => {
+    setIsGenerating(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/generate-portrait', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ portraitPrompt }),
+      });
+      const data = (await res.json()) as { imageUrl?: string } & Partial<ApiError>;
+      if (!res.ok || data.error) {
+        setError(data.error ?? 'Okänt fel vid bildgenerering.');
+      } else if (data.imageUrl) {
+        onPortraitChange(data.imageUrl);
+      }
+    } catch {
+      setError('Kunde inte nå /api/generate-portrait.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <div id={sectionId} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 sm:p-6 space-y-4">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold uppercase tracking-widest text-amber-400">Porträtt</span>
+        <div className="flex-1 border-t border-zinc-800/80" />
+      </div>
+
+      <div className="space-y-2">
+        <label className="block text-xs font-semibold text-zinc-400">Porträttkälla</label>
+        <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
+          <button
+            type="button"
+            onClick={() => { setSource('ai'); setError(null); }}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              source === 'ai' ? 'bg-amber-500 text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            AI-genererat porträtt
+          </button>
+          <button
+            type="button"
+            onClick={() => { setSource('upload'); setError(null); }}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              source === 'upload' ? 'bg-amber-500 text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Ladda upp egen bild
+          </button>
+        </div>
+      </div>
+
+      {source === 'ai' && (
+        <div className="space-y-3">
+          <p className="text-xs text-zinc-500 italic">{portraitPrompt || 'Ingen portrattprompt tillgänglig.'}</p>
+          <button
+            onClick={handleGeneratePortrait}
+            disabled={isGenerating}
+            className="flex items-center justify-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isGenerating ? (
+              <>
+                <Spinner className="h-4 w-4" />
+                <span>Genererar porträtt…</span>
+              </>
+            ) : portraitImageUrl ? (
+              <span>Generera nytt porträtt</span>
+            ) : (
+              <span>Generera porträtt</span>
+            )}
+          </button>
+        </div>
+      )}
+
+      {source === 'upload' && (
+        <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+          <div className="space-y-1">
+            <label className="block text-xs font-semibold text-zinc-300">Ladda upp egen bild</label>
+            <p className="text-xs text-zinc-500">Stöder JPEG, PNG och WebP (max 10 MB).</p>
+          </div>
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+            onChange={handleImageUpload}
+            className="block w-full text-xs text-zinc-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-500 file:text-zinc-950 hover:file:bg-amber-400 file:cursor-pointer cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950/80 p-2"
+          />
+        </div>
+      )}
+
+      {error && <ErrorAlert message={error} />}
+
+      {portraitImageUrl && (
+        <div className="overflow-hidden rounded-xl border border-zinc-800 max-w-xs">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={portraitImageUrl} alt="Aktivt porträtt" className="w-full rounded-xl" />
+        </div>
+      )}
+      {!portraitImageUrl && (
+        <p className="text-xs text-zinc-600 italic">Inget porträtt valt ännu.</p>
+      )}
+    </div>
+  );
+}
+
+// Portrait badge shown inside sub-sections
+function PortraitBadge({ portraitImageUrl, sectionId }: { portraitImageUrl: string | null; sectionId: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      {portraitImageUrl ? (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={portraitImageUrl}
+            alt="Aktivt porträtt"
+            className="h-12 w-12 rounded-lg object-cover border border-zinc-700 flex-shrink-0"
+          />
+          <div className="text-xs text-zinc-400">
+            <span className="font-semibold text-zinc-300">Aktivt porträtt</span>
+            <br />
+            <a href={`#${sectionId}`} className="text-amber-400 hover:underline">
+              Byt porträtt ↑
+            </a>
+          </div>
+        </>
+      ) : (
+        <p className="text-xs text-amber-400">
+          Inget porträtt valt.{' '}
+          <a href={`#${sectionId}`} className="underline hover:text-amber-300">
+            Välj porträtt ↑
+          </a>{' '}
+          för att kunna generera video.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SNIPPET TEST SECTION (kort klipp, redigera fritt)
 // ---------------------------------------------------------------------------
 
 type VideoStep = 'audio' | 'submit' | 'polling' | null;
 type AudioSource = 'tts' | 'upload';
-type PortraitSource = 'ai' | 'upload';
 
-interface AvatarState {
+interface SnippetState {
   snippetText: string;
   voiceName: string;
   audioSource: AudioSource;
   audioUrl: string | null;
   audioError: string | null;
-  portraitSource: PortraitSource;
-  isGeneratingPortrait: boolean;
-  portraitError: string | null;
-  portraitImageUrl: string | null;
   videoStep: VideoStep;
   videoId: string | null;
   videoPollElapsed: number;
@@ -107,25 +310,21 @@ interface AvatarState {
   videoUrl: string | null;
 }
 
-function AvatarTestSection({
+function SnippetTestSection({
   result,
-  initialPortraitUrl,
-  onPortraitGenerated,
+  portraitImageUrl,
+  portraitSectionId,
 }: {
   result: GenerationResult;
-  initialPortraitUrl?: string | null;
-  onPortraitGenerated?: (imageUrl: string) => void;
+  portraitImageUrl: string | null;
+  portraitSectionId: string;
 }) {
-  const [state, setState] = useState<AvatarState>({
+  const [state, setState] = useState<SnippetState>({
     snippetText: getFirstTwoSentences(result.speechScript),
     voiceName: 'Kore',
     audioSource: 'tts',
     audioUrl: null,
     audioError: null,
-    portraitSource: initialPortraitUrl ? 'upload' : 'ai',
-    isGeneratingPortrait: false,
-    portraitError: null,
-    portraitImageUrl: initialPortraitUrl ?? null,
     videoStep: null,
     videoId: null,
     videoPollElapsed: 0,
@@ -133,30 +332,20 @@ function AvatarTestSection({
     videoUrl: null,
   });
 
-  const patch = (updates: Partial<AvatarState>) =>
+  const patch = (updates: Partial<SnippetState>) =>
     setState((prev) => ({ ...prev, ...updates }));
-
-  // Pre-populate / sync portrait image when initialPortraitUrl is loaded
-  useEffect(() => {
-    if (initialPortraitUrl) {
-      patch({ portraitImageUrl: initialPortraitUrl });
-    }
-  }, [initialPortraitUrl]);
 
   const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     patch({ audioError: null });
     if (file.size > 15 * 1024 * 1024) {
-      patch({
-        audioError: `Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maximal filstorlek är 15 MB.`,
-      });
+      patch({ audioError: `Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Max 15 MB.` });
       return;
     }
-    const validExtensions = ['.wav', '.mp3', '.m4a', '.ogg'];
-    const validMimes = ['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/ogg', 'application/ogg'];
-    const hasValidExt = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext));
-    if (!hasValidExt && !validMimes.includes(file.type)) {
+    const validExt = ['.wav', '.mp3', '.m4a', '.ogg'];
+    const validMime = ['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/ogg', 'application/ogg'];
+    if (!validExt.some((ext) => file.name.toLowerCase().endsWith(ext)) && !validMime.includes(file.type)) {
       patch({ audioError: 'Ogiltigt filformat. Endast WAV, MP3, M4A och OGG accepteras.' });
       return;
     }
@@ -168,74 +357,8 @@ function AvatarTestSection({
     reader.readAsDataURL(file);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    patch({ portraitError: null });
-
-    // Validate size: max 10MB
-    const MAX_SIZE_BYTES = 10 * 1024 * 1024;
-    if (file.size > MAX_SIZE_BYTES) {
-      patch({
-        portraitError: `Bilden är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maximal filstorlek är 10 MB.`,
-      });
-      return;
-    }
-
-    // Validate type: jpeg/png/webp only
-    const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
-    const fileName = file.name.toLowerCase();
-    const hasValidExt = validExtensions.some((ext) => fileName.endsWith(ext));
-    const validMimes = ['image/jpeg', 'image/png', 'image/webp'];
-
-    if (!hasValidExt || !validMimes.includes(file.type)) {
-      patch({
-        portraitError: 'Ogiltigt filformat. Endast JPEG, PNG och WebP accepteras.',
-      });
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result;
-      if (typeof dataUrl === 'string') {
-        patch({ portraitImageUrl: dataUrl, portraitError: null });
-        onPortraitGenerated?.(dataUrl);
-      }
-    };
-    reader.onerror = () => {
-      patch({ portraitError: 'Ett fel uppstod vid inläsning av bilden.' });
-    };
-    reader.readAsDataURL(file);
-  };
-
-
-  const handleGeneratePortrait = async () => {
-    patch({ isGeneratingPortrait: true, portraitError: null });
-    try {
-      const res = await fetch('/api/generate-portrait', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ portraitPrompt: result.portraitPrompt }),
-      });
-      const data = (await res.json()) as { imageUrl?: string } & Partial<ApiError>;
-      if (!res.ok || data.error) {
-        patch({ portraitError: data.error ?? 'Okänt fel vid bildgenerering.' });
-      } else {
-        const imageUrl = data.imageUrl ?? null;
-        patch({ portraitImageUrl: imageUrl });
-        if (imageUrl) onPortraitGenerated?.(imageUrl);
-      }
-    } catch {
-      patch({ portraitError: 'Kunde inte nå /api/generate-portrait.' });
-    } finally {
-      patch({ isGeneratingPortrait: false });
-    }
-  };
-
   const handleGenerateVideo = async () => {
-    if (!state.portraitImageUrl) return;
+    if (!portraitImageUrl) return;
     let targetAudioUrl = state.audioUrl;
 
     if (state.audioSource === 'tts') {
@@ -264,72 +387,54 @@ function AvatarTestSection({
       }
     }
 
-    // Submit video job (async — returns videoId immediately)
     patch({ videoStep: 'submit', videoError: null, videoUrl: null, videoId: null, videoPollElapsed: 0 });
     try {
       const videoRes = await fetch('/api/generate-video-snippet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl: state.portraitImageUrl, audioUrl: targetAudioUrl }),
+        body: JSON.stringify({ imageUrl: portraitImageUrl, audioUrl: targetAudioUrl }),
       });
       const videoData = (await videoRes.json()) as { videoId?: string; error?: string };
       if (!videoRes.ok || videoData.error) {
         patch({ videoStep: null, videoError: videoData.error ?? 'Okänt fel vid videoinlämning.' });
         return;
       }
-      // Start polling
       patch({ videoStep: 'polling', videoId: videoData.videoId ?? null, videoPollElapsed: 0 });
     } catch {
       patch({ videoStep: null, videoError: 'Kunde inte nå /api/generate-video-snippet.' });
     }
   };
 
-  // Poll video job status every 3 seconds while in 'polling' step
   useEffect(() => {
     if (state.videoStep !== 'polling' || !state.videoId) return;
-
     const startTime = Date.now();
     const interval = setInterval(async () => {
       const elapsed = Math.round((Date.now() - startTime) / 1000);
       setState((prev) => ({ ...prev, videoPollElapsed: elapsed }));
-
       try {
         const res = await fetch(`/api/generate-video-snippet?videoId=${state.videoId}`);
         const data = (await res.json()) as { status: string; videoUrl?: string; error?: string };
-
         if (data.status === 'COMPLETED') {
           clearInterval(interval);
           setState((prev) => ({ ...prev, videoStep: null, videoUrl: data.videoUrl ?? null }));
         } else if (data.status === 'FAILED') {
           clearInterval(interval);
-          setState((prev) => ({
-            ...prev,
-            videoStep: null,
-            videoError: data.error ?? 'Videogenerering misslyckades.',
-          }));
+          setState((prev) => ({ ...prev, videoStep: null, videoError: data.error ?? 'Videogenerering misslyckades.' }));
         }
-        // IN_PROGRESS: keep polling
-      } catch {
-        // Network hiccup — keep trying
-      }
+      } catch { /* keep polling */ }
     }, 3000);
-
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.videoStep, state.videoId]);
 
   const isGeneratingVideo = state.videoStep !== null;
   const videoStepLabel =
-    state.videoStep === 'audio'
-      ? 'Genererar röst…'
-      : state.videoStep === 'submit'
-      ? 'Skickar in videojobb…'
-      : state.videoStep === 'polling'
-      ? `Genererar video… (${state.videoPollElapsed}s)`
-      : null;
+    state.videoStep === 'audio' ? 'Genererar röst…' :
+    state.videoStep === 'submit' ? 'Skickar in videojobb…' :
+    state.videoStep === 'polling' ? `Genererar video… (${state.videoPollElapsed}s)` :
+    null;
 
   return (
-
     <div className="border-t border-zinc-800 bg-zinc-950/30 p-5 sm:p-6 space-y-5">
       <div className="flex items-center gap-2">
         <span className="text-xs font-bold uppercase tracking-widest text-amber-400">
@@ -338,7 +443,8 @@ function AvatarTestSection({
         <div className="flex-1 border-t border-zinc-800/80" />
       </div>
 
-      {/* Audio mode toggle */}
+      <PortraitBadge portraitImageUrl={portraitImageUrl} sectionId={portraitSectionId} />
+
       <div className="space-y-2">
         <label className="block text-xs font-semibold text-zinc-400">Ljudkälla</label>
         <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
@@ -346,9 +452,7 @@ function AvatarTestSection({
             type="button"
             onClick={() => patch({ audioSource: 'tts', audioError: null })}
             className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-              state.audioSource === 'tts'
-                ? 'bg-amber-500 text-zinc-950 shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200'
+              state.audioSource === 'tts' ? 'bg-amber-500 text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
             AI-genererad röst
@@ -357,9 +461,7 @@ function AvatarTestSection({
             type="button"
             onClick={() => patch({ audioSource: 'upload', audioError: null })}
             className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-              state.audioSource === 'upload'
-                ? 'bg-amber-500 text-zinc-950 shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200'
+              state.audioSource === 'upload' ? 'bg-amber-500 text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
             Ladda upp eget ljud
@@ -383,18 +485,7 @@ function AvatarTestSection({
           </div>
           <div className="space-y-1.5 sm:w-52">
             <label className="block text-xs font-semibold text-zinc-400">Röst</label>
-            <select
-              value={state.voiceName}
-              onChange={(e) => patch({ voiceName: e.target.value })}
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5 text-sm text-zinc-200 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-            >
-              <option value="Kore">Kore (kvinna, bestämd)</option>
-              <option value="Puck">Puck (man, pigg)</option>
-              <option value="Charon">Charon (man, informativ)</option>
-              <option value="Aoede">Aoede (kvinna, lätt)</option>
-              <option value="Orus">Orus (man, bestämd)</option>
-              <option value="Leda">Leda (kvinna, ungdomlig)</option>
-            </select>
+            <VoiceSelect value={state.voiceName} onChange={(v) => patch({ voiceName: v })} accent="amber" />
           </div>
         </div>
       ) : (
@@ -419,370 +510,214 @@ function AvatarTestSection({
         </div>
       )}
 
-      {/* Step 1: Portrait */}
       <div className="space-y-3">
-        {/* Portrait source toggle */}
-        <div className="space-y-2">
-          <label className="block text-xs font-semibold text-zinc-400">Porträttkälla</label>
-          <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
-            <button
-              type="button"
-              onClick={() => patch({ portraitSource: 'ai', portraitError: null })}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                state.portraitSource === 'ai'
-                  ? 'bg-amber-500 text-zinc-950 shadow-sm'
-                  : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              AI-genererat porträtt
-            </button>
-            <button
-              type="button"
-              onClick={() => patch({ portraitSource: 'upload', portraitError: null })}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                state.portraitSource === 'upload'
-                  ? 'bg-amber-500 text-zinc-950 shadow-sm'
-                  : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Ladda upp egen bild
-            </button>
-          </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleGenerateVideo}
+            disabled={
+              !portraitImageUrl ||
+              isGeneratingVideo ||
+              (state.audioSource === 'tts' ? !state.snippetText.trim() : !state.audioUrl)
+            }
+            className="flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isGeneratingVideo ? (
+              <>
+                <Spinner className="h-4 w-4" />
+                <span>{videoStepLabel}</span>
+              </>
+            ) : state.audioSource === 'upload' ? (
+              <span>Generera video (med uppladdat ljud)</span>
+            ) : (
+              <span>Generera röst + video (kort test)</span>
+            )}
+          </button>
         </div>
-
-        {state.portraitSource === 'ai' ? (
-          <div>
-            <button
-              onClick={handleGeneratePortrait}
-              disabled={state.isGeneratingPortrait}
-              className="flex items-center justify-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {state.isGeneratingPortrait ? (
-                <>
-                  <Spinner className="h-4 w-4" />
-                  <span>Genererar porträtt…</span>
-                </>
-              ) : state.portraitImageUrl ? (
-                <span>Generera nytt porträtt</span>
-              ) : (
-                <span>Generera porträtt</span>
-              )}
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-            <div className="space-y-1">
-              <label className="block text-xs font-semibold text-zinc-300">Ladda upp egen bild</label>
-              <p className="text-xs text-zinc-500">Stöder JPEG, PNG och WebP (max 10 MB).</p>
-            </div>
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-              onChange={handleImageUpload}
-              className="block w-full text-xs text-zinc-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-500 file:text-zinc-950 hover:file:bg-amber-400 file:cursor-pointer cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950/80 p-2"
-            />
-          </div>
-        )}
-
-        {state.portraitError && <ErrorAlert message={state.portraitError} />}
-
-        {state.portraitImageUrl && (
-          <div className="overflow-hidden rounded-xl border border-zinc-800">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={state.portraitImageUrl}
-              alt={`Porträtt av ${result.personaName}`}
-              className="w-full max-w-xs rounded-xl"
-            />
+        {state.videoError && <ErrorAlert message={state.videoError} />}
+        {state.videoUrl && (
+          <div className="overflow-hidden rounded-xl border border-zinc-800 bg-black">
+            <video src={state.videoUrl} controls className="w-full max-w-md rounded-xl" playsInline />
           </div>
         )}
       </div>
-
-      {/* Step 2: Video */}
-      {state.portraitImageUrl && (
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleGenerateVideo}
-              disabled={
-                isGeneratingVideo ||
-                (state.audioSource === 'tts' ? !state.snippetText.trim() : !state.audioUrl)
-              }
-              className="flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isGeneratingVideo ? (
-                <>
-                  <Spinner className="h-4 w-4" />
-                  <span>{videoStepLabel}</span>
-                </>
-              ) : state.audioSource === 'upload' ? (
-                <span>Generera video (med uppladdat ljud)</span>
-              ) : (
-                <span>Generera röst + video (kort test)</span>
-              )}
-            </button>
-            <span className="text-xs text-zinc-500">
-              {state.audioSource === 'tts'
-                ? `Kort test ≈ ${estimateCost(state.snippetText)}`
-                : 'Kort test ≈ $0.10–$0.30'}
-            </span>
-          </div>
-          {state.videoError && <ErrorAlert message={state.videoError} />}
-          {state.videoUrl && (
-            <div className="overflow-hidden rounded-xl border border-zinc-800 bg-black">
-              <video src={state.videoUrl} controls className="w-full max-w-md rounded-xl" playsInline />
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Resolution picker + full-length video generation
+// FULL VIDEO SECTION — Steg 1 (Röst) + Steg 2 (Video)
 // ---------------------------------------------------------------------------
 
-// HeyGen Avatar IV Photo Avatar resolution tiers
-// Pricing: flat $0.05 per second of output video, regardless of resolution.
 const RESOLUTIONS = [
-  {
-    value: '720p',
-    label: '720p HD',
-    description: 'Snabbare rendering — bra för test och presentation',
-  },
-  {
-    value: '1080p',
-    label: '1080p Full HD',
-    description: 'Skarp kvalitet — rekommenderas för slutresultat',
-  },
-  {
-    value: '4k',
-    label: '4K Ultra HD',
-    description: 'Högsta bildkvalitet — tar något längre tid',
-  },
+  { value: '720p',  label: '720p HD',       description: 'Snabbare rendering — bra för test och presentation' },
+  { value: '1080p', label: '1080p Full HD',  description: 'Skarp kvalitet — rekommenderas för slutresultat' },
+  { value: '4k',    label: '4K Ultra HD',    description: 'Högsta bildkvalitet — tar något längre tid' },
 ] as const;
 
 type ResolutionValue = (typeof RESOLUTIONS)[number]['value'];
+type AudioGenStep = 'idle' | 'generating' | 'ready';
+type VideoGenStep = 'idle' | 'confirming' | 'submitting' | 'polling' | 'done' | 'error';
 
-// HeyGen: flat $0.05 per second, resolution only affects quality
-function computeCost(durationSeconds: number): string {
-  const cost = durationSeconds * 0.05;
-  return `$${cost.toFixed(2)}`;
-}
-
-
-interface FullVideoSectionProps {
+function FullVideoSection({
+  speechScript,
+  portraitImageUrl,
+  portraitSectionId,
+  onVideoSaved,
+}: {
   speechScript: string;
   portraitImageUrl: string | null;
+  portraitSectionId: string;
   onVideoSaved?: (videoUrl: string) => void;
-}
+}) {
+  // Steg 1
+  const [audioSource, setAudioSource] = useState<AudioSource>('tts');
+  const [voiceName, setVoiceName] = useState('Kore');
+  const [audioStep, setAudioStep] = useState<AudioGenStep>('idle');
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [durationSeconds, setDurationSeconds] = useState<number | null>(null);
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-type FullVideoStep =
-  | 'idle'
-  | 'generating_audio'
-  | 'pick_resolution'
-  | 'confirming'
-  | 'submitting'
-  | 'polling'
-  | 'done'
-  | 'error';
+  // Steg 2
+  const [selectedResolution, setSelectedResolution] = useState<ResolutionValue>('1080p');
+  const [videoStep, setVideoStep] = useState<VideoGenStep>('idle');
+  const [videoId, setVideoId] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [pollElapsed, setPollElapsed] = useState(0);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedOk, setSavedOk] = useState(false);
+  const [videoAudioUrl, setVideoAudioUrl] = useState<string | null>(null);
 
-interface FullVideoState {
-  step: FullVideoStep;
-  error: string | null;
-  audioSource: 'tts' | 'upload';
-  uploadError: string | null;
-  voiceName: string;
-  audioUrl: string | null;
-  durationSeconds: number | null;
-  selectedResolution: ResolutionValue;
-  videoId: string | null;
-  videoUrl: string | null;
-  pollElapsed: number;
-  isSaving: boolean;
-  savedOk: boolean;
-}
+  const audioStale = videoUrl !== null && audioUrl !== videoAudioUrl;
 
-function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: FullVideoSectionProps) {
-  const [state, setState] = useState<FullVideoState>({
-    step: 'idle',
-    error: null,
-    audioSource: 'tts',
-    uploadError: null,
-    voiceName: 'Kore',
-    audioUrl: null,
-    durationSeconds: null,
-    selectedResolution: '1080p',
-    videoId: null,
-    videoUrl: null,
-    pollElapsed: 0,
-    isSaving: false,
-    savedOk: false,
-  });
-
-  const patch = (updates: Partial<FullVideoState>) =>
-    setState((prev) => ({ ...prev, ...updates }));
-
-  // Polling interval ref — cleared on unmount
-  const pollRef = { current: null as ReturnType<typeof setInterval> | null };
-
-  const stopPolling = () => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  };
-
-  // Handle custom audio file upload — reads duration via browser Audio API
   const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    patch({ uploadError: null, audioUrl: null, durationSeconds: null });
-
-    // Validate size: 20 MB max
+    setUploadError(null);
+    setAudioUrl(null);
+    setDurationSeconds(null);
     if (file.size > 20 * 1024 * 1024) {
-      patch({
-        uploadError: `Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maximal filstorlek är 20 MB.`,
-      });
+      setUploadError(`Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Max 20 MB.`);
       return;
     }
-
-    // Validate type: wav, mp3, m4a, ogg
-    const validExtensions = ['.wav', '.mp3', '.m4a', '.ogg'];
-    const validMimes = [
-      'audio/wav', 'audio/x-wav', 'audio/wave',
-      'audio/mpeg', 'audio/mp3',
-      'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac',
-      'audio/ogg', 'application/ogg',
-    ];
-    const hasValidExt = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext));
-    if (!hasValidExt && !validMimes.includes(file.type)) {
-      patch({ uploadError: 'Ogiltigt filformat. Endast WAV, MP3, M4A och OGG accepteras.' });
+    const validExt = ['.wav', '.mp3', '.m4a', '.ogg'];
+    const validMime = ['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/ogg', 'application/ogg'];
+    if (!validExt.some((ext) => file.name.toLowerCase().endsWith(ext)) && !validMime.includes(file.type)) {
+      setUploadError('Ogiltigt filformat. Endast WAV, MP3, M4A och OGG accepteras.');
       return;
     }
-
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
-
-      // Detect duration using the browser Audio API
       const audio = new Audio(dataUrl);
       audio.addEventListener('loadedmetadata', () => {
         const dur = isFinite(audio.duration) ? Math.round(audio.duration) : null;
-        patch({ audioUrl: dataUrl, durationSeconds: dur, uploadError: null });
+        setAudioUrl(dataUrl);
+        setDurationSeconds(dur);
+        setAudioStep('ready');
       });
       audio.addEventListener('error', () => {
-        // Duration unknown — still allow the upload; cost estimate will be unavailable
-        patch({ audioUrl: dataUrl, durationSeconds: null, uploadError: null });
+        setAudioUrl(dataUrl);
+        setDurationSeconds(null);
+        setAudioStep('ready');
       });
     };
-    reader.onerror = () => {
-      patch({ uploadError: 'Ett fel uppstod vid inläsning av ljudfilen.' });
-    };
+    reader.onerror = () => setUploadError('Ett fel uppstod vid inläsning av ljudfilen.');
     reader.readAsDataURL(file);
   };
 
-  // Step 1 (TTS path): Generate full audio via Gemini TTS
   const handleGenerateAudio = async () => {
-    patch({ step: 'generating_audio', error: null });
+    setAudioStep('generating');
+    setAudioError(null);
     try {
       const res = await fetch('/api/generate-full-audio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: speechScript, voiceName: state.voiceName }),
+        body: JSON.stringify({ text: speechScript, voiceName }),
       });
       const data = await res.json() as { audioUrl?: string; durationSeconds?: number; error?: string };
       if (!res.ok || data.error) {
-        patch({ step: 'error', error: data.error ?? 'Okänt fel vid röstsyntes.' });
+        setAudioError(data.error ?? 'Okänt fel vid röstsyntes.');
+        setAudioStep('idle');
         return;
       }
-      patch({ step: 'pick_resolution', audioUrl: data.audioUrl ?? null, durationSeconds: data.durationSeconds ?? null });
+      setAudioUrl(data.audioUrl ?? null);
+      setDurationSeconds(data.durationSeconds ?? null);
+      setAudioStep('ready');
     } catch {
-      patch({ step: 'error', error: 'Kunde inte nå /api/generate-full-audio.' });
+      setAudioError('Kunde inte nå /api/generate-full-audio.');
+      setAudioStep('idle');
     }
   };
 
-  // Step 2 -> 3: Pick resolution → confirm
-  const handlePickResolution = (value: ResolutionValue) => patch({ selectedResolution: value });
-  const handleConfirm = () => patch({ step: 'confirming' });
-  const handleCancelConfirm = () => patch({ step: 'pick_resolution' });
-
-  // Step 3 -> 4: Submit video job
   const handleSubmitVideo = async () => {
-    if (!state.audioUrl || !portraitImageUrl) return;
-    patch({ step: 'submitting', error: null });
-
+    if (!audioUrl || !portraitImageUrl) return;
+    setVideoStep('submitting');
+    setVideoError(null);
     try {
       const res = await fetch('/api/generate-full-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageUrl: portraitImageUrl,
-          audioUrl: state.audioUrl,
-          resolution: state.selectedResolution,
-        }),
+        body: JSON.stringify({ imageUrl: portraitImageUrl, audioUrl, resolution: selectedResolution }),
       });
       const data = await res.json() as { videoId?: string; error?: string };
       if (!res.ok || data.error) {
-        patch({ step: 'error', error: data.error ?? 'Okänt fel vid videoinlämning.' });
+        setVideoStep('error');
+        setVideoError(data.error ?? 'Okänt fel vid videoinlämning.');
         return;
       }
-      patch({ step: 'polling', videoId: data.videoId ?? null, pollElapsed: 0 });
+      setVideoId(data.videoId ?? null);
+      setVideoAudioUrl(audioUrl);
+      setVideoStep('polling');
+      setPollElapsed(0);
     } catch {
-      patch({ step: 'error', error: 'Kunde inte nå /api/generate-full-video.' });
+      setVideoStep('error');
+      setVideoError('Kunde inte nå /api/generate-full-video.');
     }
   };
 
-  // Step 4: Poll status every 5 seconds
   useEffect(() => {
-    if (state.step !== 'polling' || !state.videoId) return;
-
+    if (videoStep !== 'polling' || !videoId) return;
     const startTime = Date.now();
-    pollRef.current = setInterval(async () => {
-      const elapsed = Math.round((Date.now() - startTime) / 1000);
-      setState((prev) => ({ ...prev, pollElapsed: elapsed }));
-
+    const interval = setInterval(async () => {
+      setPollElapsed(Math.round((Date.now() - startTime) / 1000));
       try {
-        const res = await fetch(`/api/generate-full-video?videoId=${state.videoId}`);
+        const res = await fetch(`/api/generate-full-video?videoId=${videoId}`);
         const data = await res.json() as { status: string; videoUrl?: string; error?: string };
-
         if (data.status === 'COMPLETED') {
-          stopPolling();
-          setState((prev) => ({ ...prev, step: 'done', videoUrl: data.videoUrl ?? null }));
+          clearInterval(interval);
+          setVideoStep('done');
+          setVideoUrl(data.videoUrl ?? null);
         } else if (data.status === 'FAILED') {
-          stopPolling();
-          setState((prev) => ({ ...prev, step: 'error', error: data.error ?? 'Videogenerering misslyckades.' }));
+          clearInterval(interval);
+          setVideoStep('error');
+          setVideoError(data.error ?? 'Videogenerering misslyckades.');
         }
-        // IN_PROGRESS: continue polling
-      } catch {
-        // Network error during poll — keep trying
-      }
+      } catch { /* keep polling */ }
     }, 5000);
-
-    return () => stopPolling();
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.step, state.videoId]);
+  }, [videoStep, videoId]);
 
-  // Step 5: Save final video to KV
   const handleSaveVideo = async () => {
-    if (!state.videoUrl) return;
-    patch({ isSaving: true });
+    if (!videoUrl) return;
+    setIsSaving(true);
     try {
-      await kvSetSpeech({ script: speechScript, video_url: state.videoUrl, status: 'ready' });
-      patch({ isSaving: false, savedOk: true });
-      onVideoSaved?.(state.videoUrl);
+      await kvSetSpeech({ script: speechScript, video_url: videoUrl, status: 'ready' });
+      setSavedOk(true);
+      onVideoSaved?.(videoUrl);
     } catch {
-      patch({ isSaving: false, error: 'Kunde inte spara video-URL till KV.' });
+      setVideoError('Kunde inte spara video-URL till KV.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const selectedRes = RESOLUTIONS.find((r) => r.value === state.selectedResolution)!;
+  const selectedRes = RESOLUTIONS.find((r) => r.value === selectedResolution)!;
 
   return (
-    <div className="border-t border-zinc-800 bg-zinc-950/30 p-5 sm:p-6 space-y-5">
-      {/* Section header */}
+    <div className="border-t border-zinc-800 bg-zinc-950/30 p-5 sm:p-6 space-y-6">
       <div className="flex items-center gap-2">
         <span className="text-xs font-bold uppercase tracking-widest text-red-400">
           Generera fullständig video
@@ -790,277 +725,311 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
         <div className="flex-1 border-t border-zinc-800/80" />
       </div>
 
-      {/* Idle step: audio source toggle + TTS or upload UI */}
-      {state.step === 'idle' && (
-        <div className="space-y-4">
-          {/* Source toggle */}
-          <div className="space-y-1.5">
-            <label className="block text-xs font-semibold text-zinc-400">Ljudkälla</label>
-            <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
-              <button
-                type="button"
-                onClick={() => patch({ audioSource: 'tts', audioUrl: null, durationSeconds: null, uploadError: null })}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                  state.audioSource === 'tts'
-                    ? 'bg-red-500/20 text-red-300'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                AI-genererad röst
-              </button>
-              <button
-                type="button"
-                onClick={() => patch({ audioSource: 'upload', audioUrl: null, durationSeconds: null, uploadError: null })}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                  state.audioSource === 'upload'
-                    ? 'bg-red-500/20 text-red-300'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                Ladda upp eget ljud (hela talet)
-              </button>
-            </div>
+      <PortraitBadge portraitImageUrl={portraitImageUrl} sectionId={portraitSectionId} />
+
+      {/* ── STEG 1: Röst ─────────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 sm:p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-red-500/20 text-xs font-bold text-red-300">
+            1
+          </span>
+          <span className="text-sm font-bold text-zinc-200">Generera röst</span>
+          {audioStep === 'ready' && (
+            <span className="ml-auto text-xs text-emerald-400 font-semibold">✓ Röst klar</span>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="block text-xs font-semibold text-zinc-400">Ljudkälla</label>
+          <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setAudioSource('tts');
+                setAudioUrl(null);
+                setDurationSeconds(null);
+                setUploadError(null);
+                setAudioStep('idle');
+              }}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                audioSource === 'tts' ? 'bg-red-500/20 text-red-300' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              AI-genererad röst
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAudioSource('upload');
+                setAudioUrl(null);
+                setDurationSeconds(null);
+                setUploadError(null);
+                setAudioStep('idle');
+              }}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                audioSource === 'upload' ? 'bg-red-500/20 text-red-300' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Ladda upp eget ljud (hela talet)
+            </button>
           </div>
+        </div>
 
-          {/* TTS path: voice selector + generate button */}
-          {state.audioSource === 'tts' && (
-            <>
-              <div className="space-y-1.5 sm:w-52">
-                <label className="block text-xs font-semibold text-zinc-400">Röst</label>
-                <select
-                  value={state.voiceName}
-                  onChange={(e) => patch({ voiceName: e.target.value })}
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5 text-sm text-zinc-200 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-red-500/30"
-                >
-                  <option value="Kore">Kore (kvinna, bestämd)</option>
-                  <option value="Puck">Puck (man, pigg)</option>
-                  <option value="Charon">Charon (man, informativ)</option>
-                  <option value="Aoede">Aoede (kvinna, lätt)</option>
-                  <option value="Orus">Orus (man, bestämd)</option>
-                  <option value="Leda">Leda (kvinna, ungdomlig)</option>
-                </select>
-              </div>
-
+        {audioSource === 'tts' && (
+          <div className="space-y-3">
+            <div className="space-y-1.5 sm:w-52">
+              <label className="block text-xs font-semibold text-zinc-400">Röst</label>
+              <VoiceSelect value={voiceName} onChange={setVoiceName} accent="red" />
+            </div>
+            {audioStep === 'idle' && (
               <button
                 onClick={handleGenerateAudio}
-                disabled={!portraitImageUrl}
-                className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500/20"
               >
                 Generera röst för hela talet
               </button>
-              {!portraitImageUrl && (
-                <p className="text-xs text-zinc-500">
-                  Generera ett porträtt i förhandsgranskningssektionen ovan innan du skapar fullständig video.
-                </p>
-              )}
-            </>
-          )}
-
-          {/* Upload path: file input + preview + proceed button */}
-          {state.audioSource === 'upload' && (
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-zinc-400">
-                  Ladda upp ljudfil (WAV, MP3, M4A eller OGG — max 20 MB)
-                </label>
-                <input
-                  type="file"
-                  accept="audio/*"
-                  onChange={handleAudioUpload}
-                  className="block w-full text-sm text-zinc-400 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-zinc-200 hover:file:bg-zinc-700 file:cursor-pointer"
-                />
+            )}
+            {audioStep === 'generating' && (
+              <div className="flex items-center gap-3 text-sm text-zinc-400">
+                <Spinner className="h-4 w-4" />
+                <span>Genererar röst… (kan ta 30–60 s)</span>
               </div>
-
-              {/* Validation error */}
-              {state.uploadError && (
-                <p className="text-xs text-red-400">{state.uploadError}</p>
-              )}
-
-              {/* Preview + duration once file is loaded */}
-              {state.audioUrl && (
-                <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4 space-y-2">
-                  <p className="text-sm text-zinc-300 font-medium">
-                    ✓ Ljud laddat
-                    {state.durationSeconds !== null && (
-                      <> — <span className="text-amber-400">{state.durationSeconds} sekunder</span></>
-                    )}
-                  </p>
-                  <audio src={state.audioUrl} controls className="w-full h-8" />
-                </div>
-              )}
-
-              {/* Proceed to resolution picker */}
-              {state.audioUrl && (
-                <button
-                  onClick={() => patch({ step: 'pick_resolution' })}
-                  disabled={!portraitImageUrl}
-                  className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Välj upplösning och generera video →
-                </button>
-              )}
-              {!portraitImageUrl && (
-                <p className="text-xs text-zinc-500">
-                  Generera ett porträtt i förhandsgranskningssektionen ovan innan du skapar fullständig video.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-
-      {/* Generating audio */}
-      {state.step === 'generating_audio' && (
-        <div className="flex items-center gap-3 text-sm text-zinc-400">
-          <Spinner className="h-4 w-4" />
-          <span>Genererar röst för hela talet… (kan ta 30–60 s)</span>
-        </div>
-      )}
-
-      {/* Audio ready + resolution picker */}
-      {(state.step === 'pick_resolution' || state.step === 'confirming') && state.durationSeconds !== null && (
-        <div className="space-y-5">
-          {/* Audio preview */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4 space-y-2">
-            <p className="text-sm text-zinc-300 font-medium">
-              ✓ Röst klar — <span className="text-amber-400">{state.durationSeconds} sekunder</span>
-              {' · '}
-              <span className="text-amber-400 font-bold">Beräknad kostnad: {computeCost(state.durationSeconds)}</span>
-              <span className="text-zinc-500 text-xs ml-1">(HeyGen $0.05/s)</span>
-            </p>
-            {state.audioUrl && <audio src={state.audioUrl} controls className="w-full h-8" />}
+            )}
+            {audioError && <ErrorAlert message={audioError} />}
           </div>
+        )}
 
-          {/* Resolution picker */}
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold text-zinc-400">Välj upplösning</label>
-            <p className="text-xs text-zinc-500">Upplösningen påverkar bara bildkvaliteten, inte priset.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              {RESOLUTIONS.map((res) => {
-                const isSelected = state.selectedResolution === res.value;
-                return (
-                  <button
-                    key={res.value}
-                    type="button"
-                    onClick={() => handlePickResolution(res.value)}
-                    disabled={state.step === 'confirming'}
-                    className={`rounded-xl border p-4 text-left transition space-y-1 ${
-                      isSelected
-                        ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/30'
-                        : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-700'
-                    }`}
-                  >
-                    <span className="text-sm font-semibold text-zinc-200">{res.label}</span>
-                    <p className="text-xs text-zinc-500">{res.description}</p>
-                  </button>
-                );
-              })}
+        {audioSource === 'upload' && audioStep === 'idle' && (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-zinc-400">
+                Ladda upp ljudfil (WAV, MP3, M4A eller OGG — max 20 MB)
+              </label>
+              <input
+                type="file"
+                accept="audio/*"
+                onChange={handleAudioUpload}
+                className="block w-full text-sm text-zinc-400 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-zinc-200 hover:file:bg-zinc-700 file:cursor-pointer"
+              />
             </div>
+            {uploadError && <p className="text-xs text-red-400">{uploadError}</p>}
           </div>
+        )}
 
-          {/* Proceed to confirm */}
-          {state.step === 'pick_resolution' && (
-            <button
-              onClick={handleConfirm}
-              className="rounded-xl bg-red-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-500"
-            >
-              Generera video i {selectedRes.label} för {computeCost(state.durationSeconds)} →
-            </button>
-          )}
-
-          {/* Confirmation step */}
-          {state.step === 'confirming' && (
-            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 space-y-3">
-              <p className="text-sm font-semibold text-red-300">
-                Generera video i <strong>{selectedRes.label}</strong> för{' '}
-                <strong className="text-amber-400">
-                  {computeCost(state.durationSeconds)}
-                </strong>?
-                {' '}Videogenerering faktureras direkt mot ditt HeyGen-konto ($0.05/s).
+        {audioStep === 'ready' && audioUrl && (
+          <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-zinc-300 font-medium">
+                Röst klar
+                {durationSeconds !== null && (
+                  <> — <span className="text-amber-400">{durationSeconds} sekunder</span></>
+                )}
               </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={handleSubmitVideo}
-                  className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold text-white hover:bg-red-500 transition"
-                >
-                  Bekräfta — starta generering
-                </button>
-                <button
-                  onClick={handleCancelConfirm}
-                  className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
-                >
-                  Avbryt
-                </button>
-              </div>
+              <button
+                onClick={() => {
+                  setAudioStep('idle');
+                  setAudioUrl(null);
+                  setDurationSeconds(null);
+                  setAudioError(null);
+                  setUploadError(null);
+                }}
+                className="text-xs text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded-lg px-3 py-1.5 transition hover:bg-zinc-800"
+              >
+                Prova igen
+              </button>
             </div>
+            <audio src={audioUrl} controls className="w-full h-8" />
+          </div>
+        )}
+      </div>
+
+      {/* ── STEG 2: Video ────────────────────────────────────────────── */}
+      <div
+        className={`rounded-2xl border p-4 sm:p-5 space-y-4 transition ${
+          audioStep !== 'ready'
+            ? 'border-zinc-800/50 bg-zinc-900/20 opacity-50 pointer-events-none select-none'
+            : 'border-zinc-800 bg-zinc-900/40'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-red-500/20 text-xs font-bold text-red-300">
+            2
+          </span>
+          <span className="text-sm font-bold text-zinc-200">Generera video</span>
+          {audioStep !== 'ready' && (
+            <span className="ml-2 text-xs text-zinc-600">Kräver färdig röst från Steg 1</span>
+          )}
+          {videoStep === 'done' && !audioStale && (
+            <span className="ml-auto text-xs text-emerald-400 font-semibold">✓ Video klar</span>
           )}
         </div>
-      )}
 
-      {/* Submitting job */}
-      {state.step === 'submitting' && (
-        <div className="flex items-center gap-3 text-sm text-zinc-400">
-          <Spinner className="h-4 w-4" />
-          <span>Laddar upp och skickar in videojobb till HeyGen…</span>
-        </div>
-      )}
+        {audioStale && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+            Ljudet har ändrats — generera video på nytt för att matcha det nya ljudet.
+          </div>
+        )}
 
+        {(videoStep === 'idle' || videoStep === 'confirming') && audioStep === 'ready' && (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-zinc-400">Välj upplösning</label>
+              <p className="text-xs text-zinc-500">
+                Upplösningen påverkar bara bildkvaliteten, inte priset ($0.0385/s).
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {RESOLUTIONS.map((res) => {
+                  const isSelected = selectedResolution === res.value;
+                  return (
+                    <button
+                      key={res.value}
+                      type="button"
+                      onClick={() => setSelectedResolution(res.value)}
+                      disabled={videoStep === 'confirming'}
+                      className={`rounded-xl border p-4 text-left transition space-y-1 ${
+                        isSelected
+                          ? 'border-red-500/50 bg-red-500/10 ring-1 ring-red-500/30'
+                          : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-700'
+                      }`}
+                    >
+                      <span className="text-sm font-semibold text-zinc-200">{res.label}</span>
+                      <p className="text-xs text-zinc-500">{res.description}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-      {/* Polling */}
-      {state.step === 'polling' && (
-        <div className="space-y-2">
+            {durationSeconds !== null && (
+              <p className="text-xs text-zinc-400">
+                Beräknad kostnad:{' '}
+                <span className="font-bold text-amber-400">{computeCost(durationSeconds)}</span>
+                <span className="text-zinc-600 ml-1">(HeyGen $0.0385/s)</span>
+              </p>
+            )}
+
+            {videoStep === 'idle' && (
+              <button
+                onClick={() => setVideoStep('confirming')}
+                disabled={!portraitImageUrl}
+                className="rounded-xl bg-red-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Generera video i {selectedRes.label}
+                {durationSeconds !== null ? ` för ${computeCost(durationSeconds)}` : ''} →
+              </button>
+            )}
+
+            {videoStep === 'confirming' && (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 space-y-3">
+                <p className="text-sm font-semibold text-red-300">
+                  Generera video i <strong>{selectedRes.label}</strong>
+                  {durationSeconds !== null && (
+                    <> för <strong className="text-amber-400">{computeCost(durationSeconds)}</strong>?</>
+                  )}{' '}
+                  Faktureras mot ditt HeyGen-konto ($0.0385/s).
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleSubmitVideo}
+                    className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold text-white hover:bg-red-500 transition"
+                  >
+                    Bekräfta — starta generering
+                  </button>
+                  <button
+                    onClick={() => setVideoStep('idle')}
+                    className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
+                  >
+                    Avbryt
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {videoStep === 'submitting' && (
           <div className="flex items-center gap-3 text-sm text-zinc-400">
             <Spinner className="h-4 w-4" />
-            <span>Genererar video… ({state.pollElapsed}s förfluten tid)</span>
+            <span>Laddar upp och skickar in videojobb till HeyGen…</span>
           </div>
-          <p className="text-xs text-zinc-600">
-            Lång video kan ta 3–10 minuter. Stäng inte flikens fönster.
-          </p>
-        </div>
-      )}
+        )}
 
-      {/* Done */}
-      {state.step === 'done' && state.videoUrl && (
-        <div className="space-y-4">
-          <video
-            src={state.videoUrl}
-            controls
-            className="w-full max-w-xl rounded-xl border border-zinc-800 bg-black"
-            playsInline
-          />
-          {!state.savedOk ? (
-            <button
-              onClick={handleSaveVideo}
-              disabled={state.isSaving}
-              className="flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-zinc-950 hover:bg-amber-400 transition disabled:opacity-50"
-            >
-              {state.isSaving ? (
-                <><Spinner className="h-4 w-4" /><span>Sparar…</span></>
-              ) : (
-                <span>Spara som slutgiltig video</span>
-              )}
-            </button>
-          ) : (
-            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 font-semibold">
-              ✓ Video sparad som slutgiltig — status satt till &quot;ready&quot;
+        {videoStep === 'polling' && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-3 text-sm text-zinc-400">
+              <Spinner className="h-4 w-4" />
+              <span>Genererar video… ({pollElapsed}s förfluten tid)</span>
             </div>
-          )}
-        </div>
-      )}
+            <p className="text-xs text-zinc-600">
+              Lång video kan ta 3–10 minuter. Stäng inte flikens fönster.
+            </p>
+          </div>
+        )}
 
-      {/* Error */}
-      {state.step === 'error' && state.error && (
-        <div className="space-y-3">
-          <ErrorAlert message={state.error} />
-          <button
-            onClick={() => patch({ step: 'idle', error: null, uploadError: null, audioUrl: null, durationSeconds: null, videoId: null, videoUrl: null })}
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
-          >
-            Börja om
-          </button>
-        </div>
-      )}
+        {videoStep === 'done' && videoUrl && (
+          <div className="space-y-4">
+            {audioStale && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+                OBS: Videon genererades med ett tidigare ljud. Generera om med det nuvarande om det behövs.
+              </div>
+            )}
+            <video
+              src={videoUrl}
+              controls
+              className="w-full max-w-xl rounded-xl border border-zinc-800 bg-black"
+              playsInline
+            />
+            <div className="flex flex-wrap gap-3">
+              {!savedOk ? (
+                <button
+                  onClick={handleSaveVideo}
+                  disabled={isSaving}
+                  className="flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-zinc-950 hover:bg-amber-400 transition disabled:opacity-50"
+                >
+                  {isSaving ? (
+                    <><Spinner className="h-4 w-4" /><span>Sparar…</span></>
+                  ) : (
+                    <span>Spara som slutgiltig video</span>
+                  )}
+                </button>
+              ) : (
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400 font-semibold">
+                  ✓ Video sparad som slutgiltig — status satt till &quot;ready&quot;
+                </div>
+              )}
+              <button
+                onClick={() => {
+                  setVideoStep('idle');
+                  setVideoUrl(null);
+                  setVideoId(null);
+                  setSavedOk(false);
+                  setVideoAudioUrl(null);
+                }}
+                className="rounded-xl border border-zinc-700 px-4 py-2.5 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
+              >
+                Generera ny video
+              </button>
+            </div>
+          </div>
+        )}
+
+        {videoStep === 'error' && videoError && (
+          <div className="space-y-3">
+            <ErrorAlert message={videoError} />
+            <button
+              onClick={() => {
+                setVideoStep('idle');
+                setVideoError(null);
+                setVideoId(null);
+                setVideoUrl(null);
+              }}
+              className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
+            >
+              Börja om
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1069,8 +1038,9 @@ function FullVideoSection({ speechScript, portraitImageUrl, onVideoSaved }: Full
 // Main admin page
 // ---------------------------------------------------------------------------
 
-export default function AdminPage() {
+const PORTRAIT_SECTION_ID = 'portrait-section';
 
+export default function AdminPage() {
   const [participantCount, setParticipantCount] = useState<number | null>(null);
   const [countError, setCountError] = useState<string | null>(null);
 
@@ -1086,15 +1056,10 @@ export default function AdminPage() {
   const [saveScriptError, setSaveScriptError] = useState<string | null>(null);
 
   const [isLoadingExisting, setIsLoadingExisting] = useState(true);
-  // Shared portrait URL — set by AvatarTestSection once a portrait is generated,
-  // then passed into FullVideoSection so it doesn't need to regenerate it.
-  const [sharedPortraitImageUrl, setSharedPortraitImageUrl] = useState<string | null>(null);
+  const [portraitImageUrl, setPortraitImageUrl] = useState<string | null>(null);
 
-
-  // Load participant count and any existing persona/speech on mount
   useEffect(() => {
     async function loadData() {
-      // Fetch participant count
       try {
         const res = await fetch('/api/participant-count');
         const data = await res.json() as { count?: number; error?: string };
@@ -1107,39 +1072,45 @@ export default function AdminPage() {
         setCountError('Kunde inte nå /api/participant-count.');
       }
 
-      // Fetch existing persona/speech
       try {
         const res = await fetch('/api/current-persona');
-        const data = await res.json() as { persona: { name: string; description: string; portrait_url: string } | null; speech: { script: string; video_url: string | null; status: string } | null; error?: string };
+        const data = await res.json() as {
+          persona: { name: string; description: string; portrait_url: string } | null;
+          speech: { script: string; video_url: string | null; status: string } | null;
+          error?: string;
+        };
         if (res.ok && data.persona && data.speech) {
-          const portraitUrl = data.persona.portrait_url && data.persona.portrait_url.trim() !== '' ? data.persona.portrait_url : null;
+          const savedPortrait = data.persona.portrait_url?.trim() || null;
           setResult({
             personaName: data.persona.name,
             personaDescription: data.persona.description,
-            portraitPrompt: (data.persona as any).portrait_prompt || '',
+            portraitPrompt: (data.persona as unknown as { portrait_prompt?: string }).portrait_prompt ?? '',
             speechScript: data.speech.script,
           });
           setSavedSpeechScript(data.speech.script);
-          if (portraitUrl) {
-            setSharedPortraitImageUrl(portraitUrl);
-          }
+          if (savedPortrait) setPortraitImageUrl(savedPortrait);
         }
       } catch {
-        // No saved data — that's fine, just show blank state
+        // No saved data
       } finally {
         setIsLoadingExisting(false);
       }
     }
-
     loadData();
   }, []);
 
+  const handlePortraitChange = (url: string) => {
+    setPortraitImageUrl(url);
+    fetch('/api/save-portrait', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageUrl: url }),
+    }).catch((err) => console.error('Kunde inte spara porträtt till KV:', err));
+  };
+
   const handleGenerateClick = () => {
-    if (result) {
-      setShowConfirm(true);
-    } else {
-      runGeneration();
-    }
+    if (result) setShowConfirm(true);
+    else runGeneration();
   };
 
   const runGeneration = async () => {
@@ -1166,7 +1137,7 @@ export default function AdminPage() {
           speechScript: data.speechScript!,
         });
         setSavedSpeechScript(data.speechScript!);
-        setSharedPortraitImageUrl(null);
+        setPortraitImageUrl(null);
       }
     } catch {
       setGenerateError('Kunde inte nå /api/generate-text. Kontrollera att servern körs.');
@@ -1180,7 +1151,6 @@ export default function AdminPage() {
     setIsSavingScript(true);
     setSaveScriptError(null);
     setSaveScriptSuccess(false);
-
     try {
       const res = await fetch('/api/save-speech-script', {
         method: 'POST',
@@ -1213,15 +1183,13 @@ export default function AdminPage() {
               Skarpt läge
             </span>
           </div>
-          <h1 className="text-3xl font-bold tracking-tight text-white">
-            Adminmiljö
-          </h1>
+          <h1 className="text-3xl font-bold tracking-tight text-white">Adminmiljö</h1>
           <p className="mt-2 text-sm text-zinc-400">
             Generera persona och tal baserat på riktiga deltagarsvar. Resultaten sparas och skriver över tidigare version.
           </p>
         </div>
 
-        {/* Participant count card */}
+        {/* Participant count */}
         <div className="mb-6 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400">
@@ -1244,7 +1212,8 @@ export default function AdminPage() {
           </div>
           {participantCount === 0 && (
             <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
-              Inga svar hittade i participants:ids. Observera att deltagare som svarat <em>innan</em> den senaste uppdateringen av deltagarappen inte finns i listan — de behöver svara på nytt eller backfillas manuellt.
+              Inga svar hittade i participants:ids. Deltagare som svarat <em>innan</em> den senaste uppdateringen
+              av deltagarappen finns inte i listan.
             </p>
           )}
         </div>
@@ -1252,9 +1221,8 @@ export default function AdminPage() {
         {/* Generation controls */}
         <div className="mb-6 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 sm:p-6 space-y-4">
           <h2 className="text-sm font-bold uppercase tracking-widest text-zinc-400">
-            Generera persona & tal
+            Generera persona &amp; tal
           </h2>
-
           <div className="space-y-1.5">
             <label className="block text-xs font-semibold text-zinc-400">
               Ton-instruktion{' '}
@@ -1269,7 +1237,6 @@ export default function AdminPage() {
             />
           </div>
 
-          {/* Overwrite confirmation */}
           {showConfirm && (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-3">
               <p className="text-sm font-semibold text-amber-300">
@@ -1312,7 +1279,6 @@ export default function AdminPage() {
           {generateError && <ErrorAlert message={generateError} />}
         </div>
 
-        {/* Result — existing or freshly generated */}
         {isLoadingExisting && !result && (
           <div className="flex items-center gap-3 text-sm text-zinc-500">
             <Spinner className="h-4 w-4" />
@@ -1322,7 +1288,7 @@ export default function AdminPage() {
 
         {result && (
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
-            {/* Persona header */}
+            {/* Persona header + script */}
             <div className="p-5 sm:p-6 space-y-4">
               <div className="flex items-start gap-3">
                 <div className="flex-1 min-w-0">
@@ -1334,17 +1300,15 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              {/* Speech script (editable) */}
+              {/* Editable speech script */}
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">Talskript</span>
                   <div className="flex-1 border-t border-zinc-800/60" />
                 </div>
-
                 <p className="text-xs text-zinc-400">
                   Ändringar här påverkar rösten/videon du genererar härnäst.
                 </p>
-
                 <textarea
                   rows={18}
                   value={result.speechScript}
@@ -1357,7 +1321,6 @@ export default function AdminPage() {
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 p-4 font-sans text-sm text-zinc-200 leading-relaxed placeholder-zinc-600 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                   placeholder="Skriv eller redigera talskriptet här..."
                 />
-
                 <div className="flex flex-wrap items-center gap-3">
                   <button
                     type="button"
@@ -1395,30 +1358,31 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Avatar preview section */}
-            <AvatarTestSection
+            {/* Portrait Section — shared top-level */}
+            <div className="border-t border-zinc-800 p-5 sm:p-6">
+              <PortraitSection
+                portraitPrompt={result.portraitPrompt}
+                portraitImageUrl={portraitImageUrl}
+                onPortraitChange={handlePortraitChange}
+                sectionId={PORTRAIT_SECTION_ID}
+              />
+            </div>
+
+            {/* Snippet preview */}
+            <SnippetTestSection
               result={result}
-              initialPortraitUrl={sharedPortraitImageUrl}
-              onPortraitGenerated={(url) => {
-                setSharedPortraitImageUrl(url);
-                fetch('/api/save-portrait', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ imageUrl: url }),
-                }).catch((err) => {
-                  console.error('Kunde inte spara porträtt till KV:', err);
-                });
-              }}
+              portraitImageUrl={portraitImageUrl}
+              portraitSectionId={PORTRAIT_SECTION_ID}
             />
 
-            {/* Full-length video generation section */}
+            {/* Full video */}
             <FullVideoSection
               speechScript={result.speechScript}
-              portraitImageUrl={sharedPortraitImageUrl}
+              portraitImageUrl={portraitImageUrl}
+              portraitSectionId={PORTRAIT_SECTION_ID}
             />
           </div>
         )}
-
 
         {!isLoadingExisting && !result && !isGenerating && (
           <div className="rounded-2xl border border-dashed border-zinc-800 p-8 text-center">
@@ -1428,14 +1392,14 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ── Danger Zone ──────────────────────────────────────────────── */}
         <DangerZone
           onResetComplete={(summary) => {
-            setParticipantCount(summary.participantsDeleted > 0 || summary.qaEntriesDeleted > 0 ? 0 : 0);
+            setParticipantCount(
+              summary.participantsDeleted > 0 || summary.qaEntriesDeleted > 0 ? 0 : 0
+            );
             setResult(null);
             setSavedSpeechScript('');
-            setSharedPortraitImageUrl(null);
-            // Refresh actual count from server
+            setPortraitImageUrl(null);
             fetch('/api/participant-count')
               .then((r) => r.json())
               .then((d: { count?: number }) => {
@@ -1450,7 +1414,7 @@ export default function AdminPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Danger Zone component (separated so state is isolated)
+// Danger Zone component
 // ---------------------------------------------------------------------------
 
 interface ResetSummary {
@@ -1473,11 +1437,14 @@ function DangerZone({ onResetComplete }: { onResetComplete: (summary: ResetSumma
     setIsResetting(true);
     setResetError(null);
     setResetResult(null);
-
     try {
       const res = await fetch('/api/admin/reset', { method: 'POST' });
-      const data = await res.json() as { ok: boolean; participantsDeleted?: number; qaEntriesDeleted?: number; error?: string };
-
+      const data = await res.json() as {
+        ok: boolean;
+        participantsDeleted?: number;
+        qaEntriesDeleted?: number;
+        error?: string;
+      };
       if (!res.ok || !data.ok) {
         setResetError(data.error ?? 'Nollställning misslyckades.');
       } else {
@@ -1498,7 +1465,6 @@ function DangerZone({ onResetComplete }: { onResetComplete: (summary: ResetSumma
 
   return (
     <div className="mt-12 rounded-2xl border border-red-900/40 bg-red-950/20">
-      {/* Toggle header */}
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -1510,7 +1476,10 @@ function DangerZone({ onResetComplete }: { onResetComplete: (summary: ResetSumma
           </svg>
           <span className="text-sm font-semibold text-red-400">Farliga inställningar</span>
         </div>
-        <span className="text-xs text-red-700 transition-transform" style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+        <span
+          className="text-xs text-red-700 transition-transform"
+          style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+        >
           ▼
         </span>
       </button>
@@ -1536,7 +1505,11 @@ function DangerZone({ onResetComplete }: { onResetComplete: (summary: ResetSumma
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-red-400">
-                  Skriv <span className="font-mono bg-red-900/30 px-1.5 py-0.5 rounded text-red-300">{CONFIRM_WORD}</span> för att bekräfta
+                  Skriv{' '}
+                  <span className="font-mono bg-red-900/30 px-1.5 py-0.5 rounded text-red-300">
+                    {CONFIRM_WORD}
+                  </span>{' '}
+                  för att bekräfta
                 </label>
                 <input
                   type="text"
