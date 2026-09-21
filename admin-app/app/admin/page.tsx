@@ -109,9 +109,11 @@ interface AvatarState {
 
 function AvatarTestSection({
   result,
+  initialPortraitUrl,
   onPortraitGenerated,
 }: {
   result: GenerationResult;
+  initialPortraitUrl?: string | null;
   onPortraitGenerated?: (imageUrl: string) => void;
 }) {
   const [state, setState] = useState<AvatarState>({
@@ -120,10 +122,10 @@ function AvatarTestSection({
     audioSource: 'tts',
     audioUrl: null,
     audioError: null,
-    portraitSource: 'ai',
+    portraitSource: initialPortraitUrl ? 'upload' : 'ai',
     isGeneratingPortrait: false,
     portraitError: null,
-    portraitImageUrl: null,
+    portraitImageUrl: initialPortraitUrl ?? null,
     videoStep: null,
     videoId: null,
     videoPollElapsed: 0,
@@ -133,6 +135,13 @@ function AvatarTestSection({
 
   const patch = (updates: Partial<AvatarState>) =>
     setState((prev) => ({ ...prev, ...updates }));
+
+  // Pre-populate / sync portrait image when initialPortraitUrl is loaded
+  useEffect(() => {
+    if (initialPortraitUrl) {
+      patch({ portraitImageUrl: initialPortraitUrl });
+    }
+  }, [initialPortraitUrl]);
 
   const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1071,6 +1080,11 @@ export default function AdminPage() {
   const [showConfirm, setShowConfirm] = useState(false);
 
   const [result, setResult] = useState<GenerationResult | null>(null);
+  const [savedSpeechScript, setSavedSpeechScript] = useState<string>('');
+  const [isSavingScript, setIsSavingScript] = useState(false);
+  const [saveScriptSuccess, setSaveScriptSuccess] = useState(false);
+  const [saveScriptError, setSaveScriptError] = useState<string | null>(null);
+
   const [isLoadingExisting, setIsLoadingExisting] = useState(true);
   // Shared portrait URL — set by AvatarTestSection once a portrait is generated,
   // then passed into FullVideoSection so it doesn't need to regenerate it.
@@ -1098,12 +1112,17 @@ export default function AdminPage() {
         const res = await fetch('/api/current-persona');
         const data = await res.json() as { persona: { name: string; description: string; portrait_url: string } | null; speech: { script: string; video_url: string | null; status: string } | null; error?: string };
         if (res.ok && data.persona && data.speech) {
+          const portraitUrl = data.persona.portrait_url && data.persona.portrait_url.trim() !== '' ? data.persona.portrait_url : null;
           setResult({
             personaName: data.persona.name,
             personaDescription: data.persona.description,
-            portraitPrompt: data.persona.portrait_url || '',
+            portraitPrompt: (data.persona as any).portrait_prompt || '',
             speechScript: data.speech.script,
           });
+          setSavedSpeechScript(data.speech.script);
+          if (portraitUrl) {
+            setSharedPortraitImageUrl(portraitUrl);
+          }
         }
       } catch {
         // No saved data — that's fine, just show blank state
@@ -1127,6 +1146,8 @@ export default function AdminPage() {
     setShowConfirm(false);
     setIsGenerating(true);
     setGenerateError(null);
+    setSaveScriptSuccess(false);
+    setSaveScriptError(null);
 
     try {
       const res = await fetch('/api/generate-text', {
@@ -1144,11 +1165,39 @@ export default function AdminPage() {
           portraitPrompt: data.portraitPrompt!,
           speechScript: data.speechScript!,
         });
+        setSavedSpeechScript(data.speechScript!);
+        setSharedPortraitImageUrl(null);
       }
     } catch {
       setGenerateError('Kunde inte nå /api/generate-text. Kontrollera att servern körs.');
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleSaveSpeechScript = async () => {
+    if (!result || isSavingScript) return;
+    setIsSavingScript(true);
+    setSaveScriptError(null);
+    setSaveScriptSuccess(false);
+
+    try {
+      const res = await fetch('/api/save-speech-script', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script: result.speechScript }),
+      });
+      const data = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || data.error) {
+        setSaveScriptError(data.error ?? 'Kunde inte spara talskriptet.');
+      } else {
+        setSavedSpeechScript(result.speechScript);
+        setSaveScriptSuccess(true);
+      }
+    } catch {
+      setSaveScriptError('Kunde inte nå /api/save-speech-script.');
+    } finally {
+      setIsSavingScript(false);
     }
   };
 
@@ -1285,18 +1334,55 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              {/* Speech script */}
+              {/* Speech script (editable) */}
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">Talskript</span>
                   <div className="flex-1 border-t border-zinc-800/60" />
                 </div>
-                <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4 max-h-80 overflow-y-auto">
-                  {result.speechScript.split('\n').filter(Boolean).map((para, i) => (
-                    <p key={i} className="mb-3 text-sm text-zinc-300 leading-relaxed last:mb-0">
-                      {para}
-                    </p>
-                  ))}
+
+                <p className="text-xs text-zinc-400">
+                  Ändringar här påverkar rösten/videon du genererar härnäst.
+                </p>
+
+                <textarea
+                  rows={18}
+                  value={result.speechScript}
+                  onChange={(e) => {
+                    const newScript = e.target.value;
+                    setResult((prev) => (prev ? { ...prev, speechScript: newScript } : null));
+                    setSaveScriptSuccess(false);
+                    setSaveScriptError(null);
+                  }}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 p-4 font-sans text-sm text-zinc-200 leading-relaxed placeholder-zinc-600 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  placeholder="Skriv eller redigera talskriptet här..."
+                />
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handleSaveSpeechScript}
+                    disabled={isSavingScript || result.speechScript === savedSpeechScript}
+                    className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {isSavingScript ? (
+                      <>
+                        <Spinner className="h-3.5 w-3.5 text-zinc-950" />
+                        <span>Sparar…</span>
+                      </>
+                    ) : (
+                      <span>Spara ändringar</span>
+                    )}
+                  </button>
+                  {result.speechScript !== savedSpeechScript && (
+                    <span className="text-xs text-amber-400/80">Osparade ändringar</span>
+                  )}
+                  {saveScriptSuccess && (
+                    <span className="text-xs text-emerald-400">✓ Ändringar sparade</span>
+                  )}
+                  {saveScriptError && (
+                    <span className="text-xs text-red-400">{saveScriptError}</span>
+                  )}
                 </div>
               </div>
 
@@ -1312,7 +1398,17 @@ export default function AdminPage() {
             {/* Avatar preview section */}
             <AvatarTestSection
               result={result}
-              onPortraitGenerated={(url) => setSharedPortraitImageUrl(url)}
+              initialPortraitUrl={sharedPortraitImageUrl}
+              onPortraitGenerated={(url) => {
+                setSharedPortraitImageUrl(url);
+                fetch('/api/save-portrait', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ imageUrl: url }),
+                }).catch((err) => {
+                  console.error('Kunde inte spara porträtt till KV:', err);
+                });
+              }}
             />
 
             {/* Full-length video generation section */}
@@ -1337,6 +1433,7 @@ export default function AdminPage() {
           onResetComplete={(summary) => {
             setParticipantCount(summary.participantsDeleted > 0 || summary.qaEntriesDeleted > 0 ? 0 : 0);
             setResult(null);
+            setSavedSpeechScript('');
             setSharedPortraitImageUrl(null);
             // Refresh actual count from server
             fetch('/api/participant-count')
