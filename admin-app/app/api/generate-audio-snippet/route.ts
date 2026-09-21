@@ -54,21 +54,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     // 3. Call Gemini TTS
-    // styleInstructions is passed as systemInstruction — the documented way to influence
-    // delivery style/dialect without the instruction being spoken aloud as literal text.
+    // When styleInstructions is provided, prepend a natural-language style directive
+    // directly into the content. Gemini TTS models follow inline style prompts in the
+    // content/parts (e.g. "Say the following in a slow, serious tone: ...") but do NOT
+    // support systemInstruction — that parameter causes "Developer instruction is not
+    // enabled for this model" errors.
     const genAI = new GoogleGenerativeAI(geminiApiKey);
-    const modelOptions: Parameters<typeof genAI.getGenerativeModel>[0] = {
-      model: 'gemini-3.1-flash-tts-preview',
-      ...(styleInstructions?.trim()
-        ? { systemInstruction: styleInstructions.trim() }
-        : {}),
-    };
-    const model = genAI.getGenerativeModel(modelOptions);
+    const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-tts-preview' });
+
+    const promptText = styleInstructions?.trim()
+      ? `Say the following in ${styleInstructions.trim()}:\n${text.trim()}`
+      : text.trim();
 
     let result;
     try {
       result = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: text.trim() }] }],
+        contents: [{ role: 'user', parts: [{ text: promptText }] }],
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: {

@@ -61,10 +61,19 @@ async function generateChunkPcm(
   _unused: unknown,
   geminiModel: ReturnType<GoogleGenerativeAI['getGenerativeModel']>,
   chunkText: string,
-  voiceName: string
+  voiceName: string,
+  styleInstructions?: string
 ): Promise<{ pcmBuffer: Buffer; sampleRate: number }> {
+  // When styleInstructions is provided, prepend inline style directive into content.
+  // Gemini TTS models follow natural-language prompts in content/parts but do NOT
+  // support systemInstruction (causes "Developer instruction is not enabled" error).
+  // The prefix is applied per-chunk since each generateContent call is independent.
+  const promptText = styleInstructions?.trim()
+    ? `Say the following in ${styleInstructions.trim()}:\n${chunkText}`
+    : chunkText;
+
   const result = await geminiModel.generateContent({
-    contents: [{ role: 'user', parts: [{ text: chunkText }] }],
+    contents: [{ role: 'user', parts: [{ text: promptText }] }],
     generationConfig: {
       responseModalities: ['AUDIO'],
       speechConfig: {
@@ -115,16 +124,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'GEMINI_API_KEY är inte konfigurerad på servern.' }, { status: 500 });
     }
 
-    // styleInstructions is passed as systemInstruction — the documented way to influence
-    // delivery style/dialect without the instruction being spoken aloud as literal text.
+    // Style instructions are handled as inline prompt prefix inside generateChunkPcm —
+    // see comment there. No systemInstruction parameter needed here.
     const genAI = new GoogleGenerativeAI(geminiApiKey);
-    const modelOptions: Parameters<typeof genAI.getGenerativeModel>[0] = {
-      model: 'gemini-3.1-flash-tts-preview',
-      ...(styleInstructions?.trim()
-        ? { systemInstruction: styleInstructions.trim() }
-        : {}),
-    };
-    const model = genAI.getGenerativeModel(modelOptions);
+    const model = genAI.getGenerativeModel({ model: 'gemini-3.1-flash-tts-preview' });
 
     // Split into chunks and generate each sequentially (avoid parallel API calls hitting rate limits)
     const chunks = splitIntoChunks(text.trim());
@@ -133,7 +136,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     for (let i = 0; i < chunks.length; i++) {
       try {
-        const { pcmBuffer, sampleRate } = await generateChunkPcm(null, model, chunks[i], voiceName);
+        const { pcmBuffer, sampleRate } = await generateChunkPcm(null, model, chunks[i], voiceName, styleInstructions);
         pcmBuffers.push(pcmBuffer);
         finalSampleRate = sampleRate; // All chunks will have the same rate
       } catch (chunkError: unknown) {
