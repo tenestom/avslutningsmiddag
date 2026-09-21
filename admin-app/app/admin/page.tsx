@@ -294,21 +294,9 @@ function PortraitBadge({ portraitImageUrl, sectionId }: { portraitImageUrl: stri
 // SNIPPET TEST SECTION (kort klipp, redigera fritt)
 // ---------------------------------------------------------------------------
 
-type VideoStep = 'audio' | 'submit' | 'polling' | null;
 type AudioSource = 'tts' | 'upload';
-
-interface SnippetState {
-  snippetText: string;
-  voiceName: string;
-  audioSource: AudioSource;
-  audioUrl: string | null;
-  audioError: string | null;
-  videoStep: VideoStep;
-  videoId: string | null;
-  videoPollElapsed: number;
-  videoError: string | null;
-  videoUrl: string | null;
-}
+type SnippetAudioStep = 'idle' | 'generating' | 'ready';
+type SnippetVideoStep = 'idle' | 'submitting' | 'polling' | 'done' | 'error';
 
 function SnippetTestSection({
   result,
@@ -319,123 +307,130 @@ function SnippetTestSection({
   portraitImageUrl: string | null;
   portraitSectionId: string;
 }) {
-  const [state, setState] = useState<SnippetState>({
-    snippetText: getFirstTwoSentences(result.speechScript),
-    voiceName: 'Kore',
-    audioSource: 'tts',
-    audioUrl: null,
-    audioError: null,
-    videoStep: null,
-    videoId: null,
-    videoPollElapsed: 0,
-    videoError: null,
-    videoUrl: null,
-  });
+  // Steg 1: Audio
+  const [audioSource, setAudioSource] = useState<AudioSource>('tts');
+  const [snippetText, setSnippetText] = useState(() => getFirstTwoSentences(result.speechScript));
+  const [voiceName, setVoiceName] = useState('Kore');
+  const [audioStep, setAudioStep] = useState<SnippetAudioStep>('idle');
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const patch = (updates: Partial<SnippetState>) =>
-    setState((prev) => ({ ...prev, ...updates }));
+  // Steg 2: Video
+  const [videoStep, setVideoStep] = useState<SnippetVideoStep>('idle');
+  const [videoId, setVideoId] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoPollElapsed, setVideoPollElapsed] = useState(0);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  // Track which audio produced the current video (stale detection)
+  const [videoAudioUrl, setVideoAudioUrl] = useState<string | null>(null);
+
+  const audioStale = videoUrl !== null && audioUrl !== videoAudioUrl;
 
   const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    patch({ audioError: null });
+    setUploadError(null);
+    setAudioUrl(null);
     if (file.size > 15 * 1024 * 1024) {
-      patch({ audioError: `Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Max 15 MB.` });
+      setUploadError(`Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Max 15 MB.`);
       return;
     }
     const validExt = ['.wav', '.mp3', '.m4a', '.ogg'];
     const validMime = ['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/ogg', 'application/ogg'];
     if (!validExt.some((ext) => file.name.toLowerCase().endsWith(ext)) && !validMime.includes(file.type)) {
-      patch({ audioError: 'Ogiltigt filformat. Endast WAV, MP3, M4A och OGG accepteras.' });
+      setUploadError('Ogiltigt filformat. Endast WAV, MP3, M4A och OGG accepteras.');
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === 'string') patch({ audioUrl: reader.result, audioError: null });
+      if (typeof reader.result === 'string') {
+        setAudioUrl(reader.result);
+        setAudioStep('ready');
+        setUploadError(null);
+      }
     };
-    reader.onerror = () => patch({ audioError: 'Ett fel uppstod vid inläsning av ljudfilen.' });
+    reader.onerror = () => setUploadError('Ett fel uppstod vid inläsning av ljudfilen.');
     reader.readAsDataURL(file);
   };
 
-  const handleGenerateVideo = async () => {
-    if (!portraitImageUrl) return;
-    let targetAudioUrl = state.audioUrl;
-
-    if (state.audioSource === 'tts') {
-      patch({ videoStep: 'audio', videoError: null, videoUrl: null, videoId: null, videoPollElapsed: 0 });
-      try {
-        const audioRes = await fetch('/api/generate-audio-snippet', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: state.snippetText, voiceName: state.voiceName }),
-        });
-        const audioData = (await audioRes.json()) as { audioUrl?: string } & Partial<ApiError>;
-        if (!audioRes.ok || audioData.error) {
-          patch({ videoStep: null, videoError: audioData.error ?? 'Okänt fel vid röstsyntes.' });
-          return;
-        }
-        targetAudioUrl = audioData.audioUrl!;
-        patch({ audioUrl: targetAudioUrl });
-      } catch {
-        patch({ videoStep: null, videoError: 'Kunde inte nå /api/generate-audio-snippet.' });
-        return;
-      }
-    } else {
-      if (!targetAudioUrl) {
-        patch({ videoError: 'Vänligen ladda upp en ljudfil först.' });
-        return;
-      }
-    }
-
-    patch({ videoStep: 'submit', videoError: null, videoUrl: null, videoId: null, videoPollElapsed: 0 });
+  const handleGenerateAudio = async () => {
+    setAudioStep('generating');
+    setAudioError(null);
     try {
-      const videoRes = await fetch('/api/generate-video-snippet', {
+      const res = await fetch('/api/generate-audio-snippet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl: portraitImageUrl, audioUrl: targetAudioUrl }),
+        body: JSON.stringify({ text: snippetText, voiceName }),
       });
-      const videoData = (await videoRes.json()) as { videoId?: string; error?: string };
-      if (!videoRes.ok || videoData.error) {
-        patch({ videoStep: null, videoError: videoData.error ?? 'Okänt fel vid videoinlämning.' });
+      const data = (await res.json()) as { audioUrl?: string } & Partial<ApiError>;
+      if (!res.ok || data.error) {
+        setAudioError(data.error ?? 'Okänt fel vid röstsyntes.');
+        setAudioStep('idle');
         return;
       }
-      patch({ videoStep: 'polling', videoId: videoData.videoId ?? null, videoPollElapsed: 0 });
+      setAudioUrl(data.audioUrl ?? null);
+      setAudioStep('ready');
     } catch {
-      patch({ videoStep: null, videoError: 'Kunde inte nå /api/generate-video-snippet.' });
+      setAudioError('Kunde inte nå /api/generate-audio-snippet.');
+      setAudioStep('idle');
+    }
+  };
+
+  const handleSubmitVideo = async () => {
+    if (!audioUrl || !portraitImageUrl) return;
+    setVideoStep('submitting');
+    setVideoError(null);
+    try {
+      const res = await fetch('/api/generate-video-snippet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageUrl: portraitImageUrl, audioUrl }),
+      });
+      const data = (await res.json()) as { videoId?: string; error?: string };
+      if (!res.ok || data.error) {
+        setVideoStep('error');
+        setVideoError(data.error ?? 'Okänt fel vid videoinlämning.');
+        return;
+      }
+      setVideoId(data.videoId ?? null);
+      setVideoAudioUrl(audioUrl);
+      setVideoStep('polling');
+      setVideoPollElapsed(0);
+    } catch {
+      setVideoStep('error');
+      setVideoError('Kunde inte nå /api/generate-video-snippet.');
     }
   };
 
   useEffect(() => {
-    if (state.videoStep !== 'polling' || !state.videoId) return;
+    if (videoStep !== 'polling' || !videoId) return;
     const startTime = Date.now();
     const interval = setInterval(async () => {
-      const elapsed = Math.round((Date.now() - startTime) / 1000);
-      setState((prev) => ({ ...prev, videoPollElapsed: elapsed }));
+      setVideoPollElapsed(Math.round((Date.now() - startTime) / 1000));
       try {
-        const res = await fetch(`/api/generate-video-snippet?videoId=${state.videoId}`);
+        const res = await fetch(`/api/generate-video-snippet?videoId=${videoId}`);
         const data = (await res.json()) as { status: string; videoUrl?: string; error?: string };
         if (data.status === 'COMPLETED') {
           clearInterval(interval);
-          setState((prev) => ({ ...prev, videoStep: null, videoUrl: data.videoUrl ?? null }));
+          setVideoStep('done');
+          setVideoUrl(data.videoUrl ?? null);
         } else if (data.status === 'FAILED') {
           clearInterval(interval);
-          setState((prev) => ({ ...prev, videoStep: null, videoError: data.error ?? 'Videogenerering misslyckades.' }));
+          setVideoStep('error');
+          setVideoError(data.error ?? 'Videogenerering misslyckades.');
         }
       } catch { /* keep polling */ }
     }, 3000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.videoStep, state.videoId]);
+  }, [videoStep, videoId]);
 
-  const isGeneratingVideo = state.videoStep !== null;
-  const videoStepLabel =
-    state.videoStep === 'audio' ? 'Genererar röst…' :
-    state.videoStep === 'submit' ? 'Skickar in videojobb…' :
-    state.videoStep === 'polling' ? `Genererar video… (${state.videoPollElapsed}s)` :
-    null;
+  // Short clip: estimate cost from snippet text length (~15 chars/s)
+  const estimatedSeconds = Math.max(3, Math.round(snippetText.length / 15));
 
   return (
-    <div className="border-t border-zinc-800 bg-zinc-950/30 p-5 sm:p-6 space-y-5">
+    <div className="border-t border-zinc-800 bg-zinc-950/30 p-5 sm:p-6 space-y-6">
       <div className="flex items-center gap-2">
         <span className="text-xs font-bold uppercase tracking-widest text-amber-400">
           Förhandsgranska avatar (kort klipp)
@@ -445,98 +440,229 @@ function SnippetTestSection({
 
       <PortraitBadge portraitImageUrl={portraitImageUrl} sectionId={portraitSectionId} />
 
-      <div className="space-y-2">
-        <label className="block text-xs font-semibold text-zinc-400">Ljudkälla</label>
-        <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
-          <button
-            type="button"
-            onClick={() => patch({ audioSource: 'tts', audioError: null })}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-              state.audioSource === 'tts' ? 'bg-amber-500 text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            AI-genererad röst
-          </button>
-          <button
-            type="button"
-            onClick={() => patch({ audioSource: 'upload', audioError: null })}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-              state.audioSource === 'upload' ? 'bg-amber-500 text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            Ladda upp eget ljud
-          </button>
-        </div>
-      </div>
-
-      {state.audioSource === 'tts' ? (
-        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-semibold text-zinc-400">
-              Textutdrag att testa{' '}
-              <span className="font-normal text-zinc-600">(redigera fritt)</span>
-            </label>
-            <textarea
-              rows={3}
-              value={state.snippetText}
-              onChange={(e) => patch({ snippetText: e.target.value })}
-              className="w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950/80 px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-            />
-          </div>
-          <div className="space-y-1.5 sm:w-52">
-            <label className="block text-xs font-semibold text-zinc-400">Röst</label>
-            <VoiceSelect value={state.voiceName} onChange={(v) => patch({ voiceName: v })} accent="amber" />
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-          <div className="space-y-1">
-            <label className="block text-xs font-semibold text-zinc-300">Ladda upp eget ljud</label>
-            <p className="text-xs text-zinc-500">Stöder WAV, MP3, M4A, OGG (max 15 MB).</p>
-          </div>
-          <input
-            type="file"
-            accept="audio/*,.wav,.mp3,.m4a,.ogg"
-            onChange={handleAudioUpload}
-            className="block w-full text-xs text-zinc-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-500 file:text-zinc-950 hover:file:bg-amber-400 file:cursor-pointer cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950/80 p-2"
-          />
-          {state.audioError && <ErrorAlert message={state.audioError} />}
-          {state.audioUrl && (
-            <div className="mt-2 space-y-1.5 rounded-lg border border-zinc-800/80 bg-zinc-900/50 p-3">
-              <span className="text-xs font-medium text-zinc-300">Förhandslyssning:</span>
-              <audio src={state.audioUrl} controls className="w-full h-8" />
-            </div>
+      {/* ── STEG 1: Röst ─────────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 sm:p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/20 text-xs font-bold text-amber-300">
+            1
+          </span>
+          <span className="text-sm font-bold text-zinc-200">Generera röst (kort test)</span>
+          {audioStep === 'ready' && (
+            <span className="ml-auto text-xs text-emerald-400 font-semibold">✓ Röst klar</span>
           )}
         </div>
-      )}
 
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={handleGenerateVideo}
-            disabled={
-              !portraitImageUrl ||
-              isGeneratingVideo ||
-              (state.audioSource === 'tts' ? !state.snippetText.trim() : !state.audioUrl)
-            }
-            className="flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isGeneratingVideo ? (
-              <>
-                <Spinner className="h-4 w-4" />
-                <span>{videoStepLabel}</span>
-              </>
-            ) : state.audioSource === 'upload' ? (
-              <span>Generera video (med uppladdat ljud)</span>
-            ) : (
-              <span>Generera röst + video (kort test)</span>
-            )}
-          </button>
+        {/* Source toggle */}
+        <div className="space-y-1.5">
+          <label className="block text-xs font-semibold text-zinc-400">Ljudkälla</label>
+          <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setAudioSource('tts');
+                setAudioUrl(null);
+                setUploadError(null);
+                setAudioStep('idle');
+              }}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                audioSource === 'tts' ? 'bg-amber-500/20 text-amber-300' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              AI-genererad röst
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAudioSource('upload');
+                setAudioUrl(null);
+                setAudioError(null);
+                setAudioStep('idle');
+              }}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                audioSource === 'upload' ? 'bg-amber-500/20 text-amber-300' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Ladda upp eget ljud
+            </button>
+          </div>
         </div>
-        {state.videoError && <ErrorAlert message={state.videoError} />}
-        {state.videoUrl && (
-          <div className="overflow-hidden rounded-xl border border-zinc-800 bg-black">
-            <video src={state.videoUrl} controls className="w-full max-w-md rounded-xl" playsInline />
+
+        {/* TTS path */}
+        {audioSource === 'tts' && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-zinc-400">
+                  Textutdrag{' '}
+                  <span className="font-normal text-zinc-600">(redigera fritt)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={snippetText}
+                  onChange={(e) => setSnippetText(e.target.value)}
+                  className="w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950/80 px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 transition focus:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                />
+              </div>
+              <div className="space-y-1.5 sm:w-52">
+                <label className="block text-xs font-semibold text-zinc-400">Röst</label>
+                <VoiceSelect value={voiceName} onChange={setVoiceName} accent="amber" />
+              </div>
+            </div>
+            {audioStep === 'idle' && (
+              <button
+                onClick={handleGenerateAudio}
+                disabled={!snippetText.trim()}
+                className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Generera röst
+              </button>
+            )}
+            {audioStep === 'generating' && (
+              <div className="flex items-center gap-3 text-sm text-zinc-400">
+                <Spinner className="h-4 w-4" />
+                <span>Genererar röst…</span>
+              </div>
+            )}
+            {audioError && <ErrorAlert message={audioError} />}
+          </div>
+        )}
+
+        {/* Upload path */}
+        {audioSource === 'upload' && audioStep === 'idle' && (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-zinc-400">
+                Ladda upp ljudfil (WAV, MP3, M4A eller OGG — max 15 MB)
+              </label>
+              <input
+                type="file"
+                accept="audio/*,.wav,.mp3,.m4a,.ogg"
+                onChange={handleAudioUpload}
+                className="block w-full text-xs text-zinc-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-500 file:text-zinc-950 hover:file:bg-amber-400 file:cursor-pointer cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950/80 p-2"
+              />
+            </div>
+            {uploadError && <p className="text-xs text-red-400">{uploadError}</p>}
+          </div>
+        )}
+
+        {/* Audio ready: player + "Prova igen" */}
+        {audioStep === 'ready' && audioUrl && (
+          <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-zinc-300 font-medium">Röst klar</p>
+              <button
+                onClick={() => {
+                  setAudioStep('idle');
+                  setAudioUrl(null);
+                  setAudioError(null);
+                  setUploadError(null);
+                }}
+                className="text-xs text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded-lg px-3 py-1.5 transition hover:bg-zinc-800"
+              >
+                Prova igen
+              </button>
+            </div>
+            <audio src={audioUrl} controls className="w-full h-8" />
+          </div>
+        )}
+      </div>
+
+      {/* ── STEG 2: Video ────────────────────────────────────────────── */}
+      <div
+        className={`rounded-2xl border p-4 sm:p-5 space-y-4 transition ${
+          audioStep !== 'ready'
+            ? 'border-zinc-800/50 bg-zinc-900/20 opacity-50 pointer-events-none select-none'
+            : 'border-zinc-800 bg-zinc-900/40'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/20 text-xs font-bold text-amber-300">
+            2
+          </span>
+          <span className="text-sm font-bold text-zinc-200">Generera video (kort test)</span>
+          {audioStep !== 'ready' && (
+            <span className="ml-2 text-xs text-zinc-600">Kräver färdig röst från Steg 1</span>
+          )}
+          {videoStep === 'done' && !audioStale && (
+            <span className="ml-auto text-xs text-emerald-400 font-semibold">✓ Video klar</span>
+          )}
+        </div>
+
+        {audioStale && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+            Ljudet har ändrats — generera video på nytt för att matcha det nya ljudet.
+          </div>
+        )}
+
+        {(videoStep === 'idle') && audioStep === 'ready' && (
+          <div className="space-y-3">
+            <p className="text-xs text-zinc-400">
+              Beräknad kostnad:{' '}
+              <span className="font-bold text-amber-400">{computeCost(estimatedSeconds)}</span>
+              <span className="text-zinc-600 ml-1">(HeyGen $0.0385/s, ~{estimatedSeconds}s)</span>
+            </p>
+            <button
+              onClick={handleSubmitVideo}
+              disabled={!portraitImageUrl}
+              className="flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Generera video (kort test)
+            </button>
+          </div>
+        )}
+
+        {videoStep === 'submitting' && (
+          <div className="flex items-center gap-3 text-sm text-zinc-400">
+            <Spinner className="h-4 w-4" />
+            <span>Skickar in videojobb…</span>
+          </div>
+        )}
+
+        {videoStep === 'polling' && (
+          <div className="flex items-center gap-3 text-sm text-zinc-400">
+            <Spinner className="h-4 w-4" />
+            <span>Genererar video… ({videoPollElapsed}s)</span>
+          </div>
+        )}
+
+        {videoStep === 'done' && videoUrl && (
+          <div className="space-y-3">
+            {audioStale && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+                OBS: Videon genererades med ett tidigare ljud.
+              </div>
+            )}
+            <div className="overflow-hidden rounded-xl border border-zinc-800 bg-black">
+              <video src={videoUrl} controls className="w-full max-w-md rounded-xl" playsInline />
+            </div>
+            <button
+              onClick={() => {
+                setVideoStep('idle');
+                setVideoUrl(null);
+                setVideoId(null);
+                setVideoAudioUrl(null);
+              }}
+              className="rounded-xl border border-zinc-700 px-4 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 transition"
+            >
+              Generera ny video
+            </button>
+          </div>
+        )}
+
+        {videoStep === 'error' && videoError && (
+          <div className="space-y-3">
+            <ErrorAlert message={videoError} />
+            <button
+              onClick={() => {
+                setVideoStep('idle');
+                setVideoError(null);
+                setVideoId(null);
+                setVideoUrl(null);
+              }}
+              className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
+            >
+              Börja om
+            </button>
           </div>
         )}
       </div>
