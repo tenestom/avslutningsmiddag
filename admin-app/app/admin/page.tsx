@@ -313,7 +313,10 @@ function SnippetTestSection({
   const [voiceName, setVoiceName] = useState('Kore');
   const [styleInstructions, setStyleInstructions] = useState('');
   const [audioStep, setAudioStep] = useState<SnippetAudioStep>('idle');
+  // audioUrl: public CDN URL (for <audio> preview) — never a large base64 blob
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  // audioAssetId: HeyGen asset_id passed directly to Steg 2 (no re-upload needed)
+  const [audioAssetId, setAudioAssetId] = useState<string | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -323,16 +326,17 @@ function SnippetTestSection({
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoPollElapsed, setVideoPollElapsed] = useState(0);
   const [videoError, setVideoError] = useState<string | null>(null);
-  // Track which audio produced the current video (stale detection)
-  const [videoAudioUrl, setVideoAudioUrl] = useState<string | null>(null);
+  // Stale detection: track the assetId used when the current video was generated
+  const [videoAudioAssetId, setVideoAudioAssetId] = useState<string | null>(null);
 
-  const audioStale = videoUrl !== null && audioUrl !== videoAudioUrl;
+  const audioStale = videoUrl !== null && audioAssetId !== videoAudioAssetId;
 
   const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadError(null);
     setAudioUrl(null);
+    setAudioAssetId(null);
     if (file.size > 15 * 1024 * 1024) {
       setUploadError(`Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Max 15 MB.`);
       return;
@@ -343,12 +347,30 @@ function SnippetTestSection({
       setUploadError('Ogiltigt filformat. Endast WAV, MP3, M4A och OGG accepteras.');
       return;
     }
+    // Read file → upload to HeyGen server-side → store assetId (never store base64 in state)
     const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setAudioUrl(reader.result);
+    reader.onload = async () => {
+      if (typeof reader.result !== 'string') return;
+      setAudioStep('generating'); // reuse generating spinner while uploading
+      try {
+        const res = await fetch('/api/upload-audio-asset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audioDataUrl: reader.result }),
+        });
+        const data = (await res.json()) as { audioAssetId?: string; audioUrl?: string; error?: string };
+        if (!res.ok || data.error) {
+          setUploadError(data.error ?? 'Uppladdning till HeyGen misslyckades.');
+          setAudioStep('idle');
+          return;
+        }
+        setAudioAssetId(data.audioAssetId ?? null);
+        setAudioUrl(data.audioUrl ?? null);
         setAudioStep('ready');
         setUploadError(null);
+      } catch {
+        setUploadError('Kunde inte nå /api/upload-audio-asset.');
+        setAudioStep('idle');
       }
     };
     reader.onerror = () => setUploadError('Ett fel uppstod vid inläsning av ljudfilen.');
@@ -364,12 +386,13 @@ function SnippetTestSection({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: snippetText, voiceName, styleInstructions: styleInstructions.trim() || undefined }),
       });
-      const data = (await res.json()) as { audioUrl?: string } & Partial<ApiError>;
+      const data = (await res.json()) as { audioAssetId?: string; audioUrl?: string } & Partial<ApiError>;
       if (!res.ok || data.error) {
         setAudioError(data.error ?? 'Okänt fel vid röstsyntes.');
         setAudioStep('idle');
         return;
       }
+      setAudioAssetId(data.audioAssetId ?? null);
       setAudioUrl(data.audioUrl ?? null);
       setAudioStep('ready');
     } catch {
@@ -379,14 +402,14 @@ function SnippetTestSection({
   };
 
   const handleSubmitVideo = async () => {
-    if (!audioUrl || !portraitImageUrl) return;
+    if (!audioAssetId || !portraitImageUrl) return;
     setVideoStep('submitting');
     setVideoError(null);
     try {
       const res = await fetch('/api/generate-video-snippet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl: portraitImageUrl, audioUrl }),
+        body: JSON.stringify({ imageUrl: portraitImageUrl, audioAssetId }),
       });
       const data = (await res.json()) as { videoId?: string; error?: string };
       if (!res.ok || data.error) {
@@ -395,7 +418,7 @@ function SnippetTestSection({
         return;
       }
       setVideoId(data.videoId ?? null);
-      setVideoAudioUrl(audioUrl);
+      setVideoAudioAssetId(audioAssetId);
       setVideoStep('polling');
       setVideoPollElapsed(0);
     } catch {
@@ -462,6 +485,7 @@ function SnippetTestSection({
               onClick={() => {
                 setAudioSource('tts');
                 setAudioUrl(null);
+                setAudioAssetId(null);
                 setUploadError(null);
                 setAudioStep('idle');
               }}
@@ -476,6 +500,7 @@ function SnippetTestSection({
               onClick={() => {
                 setAudioSource('upload');
                 setAudioUrl(null);
+                setAudioAssetId(null);
                 setAudioError(null);
                 setAudioStep('idle');
               }}
@@ -568,6 +593,7 @@ function SnippetTestSection({
                 onClick={() => {
                   setAudioStep('idle');
                   setAudioUrl(null);
+                  setAudioAssetId(null);
                   setAudioError(null);
                   setUploadError(null);
                 }}
@@ -654,7 +680,7 @@ function SnippetTestSection({
                 setVideoStep('idle');
                 setVideoUrl(null);
                 setVideoId(null);
-                setVideoAudioUrl(null);
+                setVideoAudioAssetId(null);
               }}
               className="rounded-xl border border-zinc-700 px-4 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 transition"
             >
@@ -714,7 +740,10 @@ function FullVideoSection({
   const [voiceName, setVoiceName] = useState('Kore');
   const [styleInstructions, setStyleInstructions] = useState('');
   const [audioStep, setAudioStep] = useState<AudioGenStep>('idle');
+  // audioUrl: public CDN URL (for <audio> preview) — never a large base64 blob
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  // audioAssetId: HeyGen asset_id passed directly to Steg 2 (no re-upload needed)
+  const [audioAssetId, setAudioAssetId] = useState<string | null>(null);
   const [durationSeconds, setDurationSeconds] = useState<number | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -728,15 +757,17 @@ function FullVideoSection({
   const [videoError, setVideoError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
-  const [videoAudioUrl, setVideoAudioUrl] = useState<string | null>(null);
+  // Stale detection: track the assetId used when the current video was generated
+  const [videoAudioAssetId, setVideoAudioAssetId] = useState<string | null>(null);
 
-  const audioStale = videoUrl !== null && audioUrl !== videoAudioUrl;
+  const audioStale = videoUrl !== null && audioAssetId !== videoAudioAssetId;
 
   const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadError(null);
     setAudioUrl(null);
+    setAudioAssetId(null);
     setDurationSeconds(null);
     if (file.size > 20 * 1024 * 1024) {
       setUploadError(`Filen är för stor (${(file.size / (1024 * 1024)).toFixed(1)} MB). Max 20 MB.`);
@@ -748,21 +779,45 @@ function FullVideoSection({
       setUploadError('Ogiltigt filformat. Endast WAV, MP3, M4A och OGG accepteras.');
       return;
     }
+    // Extract duration client-side, then upload to HeyGen server-side.
+    // We do NOT store base64 in state — upload immediately and keep only the assetId.
     const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
+    reader.onload = async () => {
+      if (typeof reader.result !== 'string') return;
+      const dataUrl = reader.result;
+
+      // Extract duration via browser Audio API before sending to server
       const audio = new Audio(dataUrl);
-      audio.addEventListener('loadedmetadata', () => {
-        const dur = isFinite(audio.duration) ? Math.round(audio.duration) : null;
-        setAudioUrl(dataUrl);
-        setDurationSeconds(dur);
-        setAudioStep('ready');
+      const dur = await new Promise<number | null>((resolve) => {
+        audio.addEventListener('loadedmetadata', () =>
+          resolve(isFinite(audio.duration) ? Math.round(audio.duration) : null)
+        );
+        audio.addEventListener('error', () => resolve(null));
       });
-      audio.addEventListener('error', () => {
-        setAudioUrl(dataUrl);
-        setDurationSeconds(null);
+      setDurationSeconds(dur);
+
+      // Upload to HeyGen server-side
+      setAudioStep('generating'); // reuse generating spinner while uploading
+      try {
+        const res = await fetch('/api/upload-audio-asset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audioDataUrl: dataUrl }),
+        });
+        const data = (await res.json()) as { audioAssetId?: string; audioUrl?: string; error?: string };
+        if (!res.ok || data.error) {
+          setUploadError(data.error ?? 'Uppladdning till HeyGen misslyckades.');
+          setAudioStep('idle');
+          return;
+        }
+        setAudioAssetId(data.audioAssetId ?? null);
+        setAudioUrl(data.audioUrl ?? null);
         setAudioStep('ready');
-      });
+        setUploadError(null);
+      } catch {
+        setUploadError('Kunde inte nå /api/upload-audio-asset.');
+        setAudioStep('idle');
+      }
     };
     reader.onerror = () => setUploadError('Ett fel uppstod vid inläsning av ljudfilen.');
     reader.readAsDataURL(file);
@@ -777,12 +832,13 @@ function FullVideoSection({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: speechScript, voiceName, styleInstructions: styleInstructions.trim() || undefined }),
       });
-      const data = await res.json() as { audioUrl?: string; durationSeconds?: number; error?: string };
+      const data = await res.json() as { audioAssetId?: string; audioUrl?: string; durationSeconds?: number; error?: string };
       if (!res.ok || data.error) {
         setAudioError(data.error ?? 'Okänt fel vid röstsyntes.');
         setAudioStep('idle');
         return;
       }
+      setAudioAssetId(data.audioAssetId ?? null);
       setAudioUrl(data.audioUrl ?? null);
       setDurationSeconds(data.durationSeconds ?? null);
       setAudioStep('ready');
@@ -793,14 +849,14 @@ function FullVideoSection({
   };
 
   const handleSubmitVideo = async () => {
-    if (!audioUrl || !portraitImageUrl) return;
+    if (!audioAssetId || !portraitImageUrl) return;
     setVideoStep('submitting');
     setVideoError(null);
     try {
       const res = await fetch('/api/generate-full-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl: portraitImageUrl, audioUrl, resolution: selectedResolution }),
+        body: JSON.stringify({ imageUrl: portraitImageUrl, audioAssetId, resolution: selectedResolution }),
       });
       const data = await res.json() as { videoId?: string; error?: string };
       if (!res.ok || data.error) {
@@ -809,7 +865,7 @@ function FullVideoSection({
         return;
       }
       setVideoId(data.videoId ?? null);
-      setVideoAudioUrl(audioUrl);
+      setVideoAudioAssetId(audioAssetId);
       setVideoStep('polling');
       setPollElapsed(0);
     } catch {
@@ -888,6 +944,7 @@ function FullVideoSection({
               onClick={() => {
                 setAudioSource('tts');
                 setAudioUrl(null);
+                setAudioAssetId(null);
                 setDurationSeconds(null);
                 setUploadError(null);
                 setAudioStep('idle');
@@ -903,6 +960,7 @@ function FullVideoSection({
               onClick={() => {
                 setAudioSource('upload');
                 setAudioUrl(null);
+                setAudioAssetId(null);
                 setDurationSeconds(null);
                 setUploadError(null);
                 setAudioStep('idle');
@@ -983,6 +1041,7 @@ function FullVideoSection({
                 onClick={() => {
                   setAudioStep('idle');
                   setAudioUrl(null);
+                  setAudioAssetId(null);
                   setDurationSeconds(null);
                   setAudioError(null);
                   setUploadError(null);
@@ -1157,7 +1216,7 @@ function FullVideoSection({
                   setVideoUrl(null);
                   setVideoId(null);
                   setSavedOk(false);
-                  setVideoAudioUrl(null);
+                  setVideoAudioAssetId(null);
                 }}
                 className="rounded-xl border border-zinc-700 px-4 py-2.5 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 transition"
               >

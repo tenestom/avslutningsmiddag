@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { uploadAssetToHeyGen } from '@shared/heygenClient';
 
 // ---------------------------------------------------------------------------
 // WAV header builder for raw PCM data returned by Gemini TTS.
@@ -116,9 +117,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Decode base64 → raw binary PCM bytes, then build a valid WAV
     const rawPcmBuffer = Buffer.from(rawBase64, 'base64');
     const wavBuffer = pcmToWav(rawPcmBuffer, sampleRate);
-    const audioUrl = `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
 
-    return NextResponse.json({ audioUrl });
+    // 6. Upload WAV to HeyGen server-to-server, then return only the small assetId + CDN URL.
+    //    This keeps the client←→server payload tiny and is consistent with generate-full-audio.
+    //    The audioAssetId is passed directly to generate-video-snippet in Steg 2.
+    const heygenApiKey = process.env.HEYGEN_API_KEY;
+    if (!heygenApiKey) {
+      return NextResponse.json(
+        { error: 'HEYGEN_API_KEY är inte konfigurerad på servern.' },
+        { status: 500 }
+      );
+    }
+
+    let audioAssetId: string;
+    let audioUrl: string;
+    try {
+      const wavDataUrl = `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
+      const uploaded = await uploadAssetToHeyGen(wavDataUrl, heygenApiKey);
+      audioAssetId = uploaded.assetId;
+      audioUrl = uploaded.url;
+    } catch (uploadError: unknown) {
+      const msg = uploadError instanceof Error ? uploadError.message : 'Okänt fel';
+      console.error('HeyGen audio upload error:', msg);
+      return NextResponse.json(
+        { error: `Ljuduppladdning till HeyGen misslyckades: ${msg}` },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({ audioAssetId, audioUrl });
   } catch (error: unknown) {
     console.error('Unexpected error in /api/generate-audio-snippet:', error);
     const message = error instanceof Error ? error.message : 'Okänt fel';

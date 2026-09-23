@@ -8,7 +8,7 @@ const SUPPORTED_RESOLUTIONS = ['720p', '1080p', '4k'] as const;
 type Resolution = (typeof SUPPORTED_RESOLUTIONS)[number];
 
 // ---------------------------------------------------------------------------
-// POST — upload image + audio to HeyGen, submit video job, return videoId
+// POST — upload image to HeyGen, submit video job using pre-uploaded audioAssetId
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
@@ -20,14 +20,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    let body: { imageUrl: string; audioUrl: string; resolution: string };
+    // audioAssetId is the HeyGen asset_id returned from /api/generate-full-audio or
+    // /api/generate-audio-snippet — already uploaded server-to-server, so we skip re-uploading
+    // the raw audio here (which would exceed Vercel's ~4.5 MB request body limit for long speech).
+    let body: { imageUrl: string; audioAssetId: string; resolution: string };
     try {
-      body = (await req.json()) as { imageUrl: string; audioUrl: string; resolution: string };
+      body = (await req.json()) as { imageUrl: string; audioAssetId: string; resolution: string };
     } catch {
       return NextResponse.json({ error: 'Invalid JSON in request body.' }, { status: 400 });
     }
 
-    const { imageUrl, audioUrl, resolution } = body;
+    const { imageUrl, audioAssetId, resolution } = body;
 
     if (!imageUrl?.startsWith('data:')) {
       return NextResponse.json(
@@ -35,9 +38,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         { status: 400 }
       );
     }
-    if (!audioUrl?.startsWith('data:')) {
+    if (!audioAssetId?.trim()) {
       return NextResponse.json(
-        { error: 'audioUrl saknas eller är inte en giltig base64 data URL.' },
+        { error: 'audioAssetId saknas. Generera rösten i Steg 1 först.' },
         { status: 400 }
       );
     }
@@ -48,27 +51,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    // Upload image and audio assets to HeyGen
+    // Upload portrait image to HeyGen (images are small, well within body limits)
     let imageAssetId: string;
     try {
-      imageAssetId = await uploadAssetToHeyGen(imageUrl, apiKey);
+      const result = await uploadAssetToHeyGen(imageUrl, apiKey);
+      imageAssetId = result.assetId;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Okänt fel';
       console.error('HeyGen image upload error:', msg);
       return NextResponse.json(
         { error: `Bilduppladdning till HeyGen misslyckades: ${msg}` },
-        { status: 502 }
-      );
-    }
-
-    let audioAssetId: string;
-    try {
-      audioAssetId = await uploadAssetToHeyGen(audioUrl, apiKey);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Okänt fel';
-      console.error('HeyGen audio upload error:', msg);
-      return NextResponse.json(
-        { error: `Ljuduppladdning till HeyGen misslyckades: ${msg}` },
         { status: 502 }
       );
     }

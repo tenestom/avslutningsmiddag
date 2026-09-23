@@ -74,7 +74,10 @@ function dataUrlToBuffer(dataUrl: string): { buffer: Buffer; mimeType: string; e
 //    POST https://api.heygen.com/v3/assets
 //    Returns the asset_id string.
 // ---------------------------------------------------------------------------
-export async function uploadAssetToHeyGen(dataUrl: string, apiKey: string): Promise<string> {
+export async function uploadAssetToHeyGen(
+  dataUrl: string,
+  apiKey: string
+): Promise<{ assetId: string; url: string }> {
   const { buffer, mimeType, extension } = dataUrlToBuffer(dataUrl);
 
   // Build multipart/form-data body using the Fetch FormData API (Node 18+)
@@ -100,7 +103,7 @@ export async function uploadAssetToHeyGen(dataUrl: string, apiKey: string): Prom
   }
 
   console.log('HeyGen asset upload success response:', JSON.stringify(json, null, 2));
-  return json.data.asset_id;
+  return { assetId: json.data.asset_id, url: json.data.url ?? '' };
 }
 
 // ---------------------------------------------------------------------------

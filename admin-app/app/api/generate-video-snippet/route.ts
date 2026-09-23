@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadAssetToHeyGen, createHeygenVideo, getHeygenVideoStatus } from '@shared/heygenClient';
 
 // ---------------------------------------------------------------------------
-// POST — upload image + audio to HeyGen, submit video job, return videoId
+// POST — upload image to HeyGen, submit video job using pre-uploaded audioAssetId
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
@@ -14,48 +14,39 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    let body: { imageUrl: string; audioUrl: string };
+    // audioAssetId is the HeyGen asset_id returned from /api/generate-audio-snippet —
+    // already uploaded server-to-server, no need to re-upload raw audio here.
+    let body: { imageUrl: string; audioAssetId: string };
     try {
-      body = (await req.json()) as { imageUrl: string; audioUrl: string };
+      body = (await req.json()) as { imageUrl: string; audioAssetId: string };
     } catch {
       return NextResponse.json({ error: 'Invalid JSON in request body.' }, { status: 400 });
     }
 
-    const { imageUrl, audioUrl } = body;
+    const { imageUrl, audioAssetId } = body;
     if (!imageUrl?.startsWith('data:')) {
       return NextResponse.json(
         { error: 'imageUrl saknas eller är inte en giltig base64 data URL.' },
         { status: 400 }
       );
     }
-    if (!audioUrl?.startsWith('data:')) {
+    if (!audioAssetId?.trim()) {
       return NextResponse.json(
-        { error: 'audioUrl saknas eller är inte en giltig base64 data URL.' },
+        { error: 'audioAssetId saknas. Generera rösten i Steg 1 först.' },
         { status: 400 }
       );
     }
 
-    // Upload image and audio assets to HeyGen
+    // Upload portrait image to HeyGen (images are small, well within body limits)
     let imageAssetId: string;
     try {
-      imageAssetId = await uploadAssetToHeyGen(imageUrl, apiKey);
+      const result = await uploadAssetToHeyGen(imageUrl, apiKey);
+      imageAssetId = result.assetId;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Okänt fel';
       console.error('HeyGen image upload error:', msg);
       return NextResponse.json(
         { error: `Bilduppladdning till HeyGen misslyckades: ${msg}` },
-        { status: 502 }
-      );
-    }
-
-    let audioAssetId: string;
-    try {
-      audioAssetId = await uploadAssetToHeyGen(audioUrl, apiKey);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Okänt fel';
-      console.error('HeyGen audio upload error:', msg);
-      return NextResponse.json(
-        { error: `Ljuduppladdning till HeyGen misslyckades: ${msg}` },
         { status: 502 }
       );
     }

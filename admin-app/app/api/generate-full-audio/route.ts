@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { uploadAssetToHeyGen } from '@shared/heygenClient';
 
 // ---------------------------------------------------------------------------
 // WAV header builder (same as generate-audio-snippet)
@@ -158,9 +159,38 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // Wrap in WAV header
     const wavBuffer = pcmToWav(concatenatedPcm, finalSampleRate);
-    const audioUrl = `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
 
-    return NextResponse.json({ audioUrl, durationSeconds });
+    // Upload WAV to HeyGen server-to-server.
+    // We do NOT send the raw base64 audio back to the client — a 5-minute WAV
+    // encodes to ~60 MB base64, far exceeding Vercel's ~4.5 MB response body limit.
+    // Instead we upload here and return only the small assetId + public CDN URL.
+    const heygenApiKey = process.env.HEYGEN_API_KEY;
+    if (!heygenApiKey) {
+      return NextResponse.json(
+        { error: 'HEYGEN_API_KEY är inte konfigurerad på servern.' },
+        { status: 500 }
+      );
+    }
+
+    let audioAssetId: string;
+    let audioUrl: string;
+    try {
+      const wavDataUrl = `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
+      const uploaded = await uploadAssetToHeyGen(wavDataUrl, heygenApiKey);
+      audioAssetId = uploaded.assetId;
+      audioUrl = uploaded.url;
+    } catch (uploadError: unknown) {
+      const msg = uploadError instanceof Error ? uploadError.message : 'Okänt fel';
+      console.error('HeyGen audio upload error:', msg);
+      return NextResponse.json(
+        { error: `Ljuduppladdning till HeyGen misslyckades: ${msg}` },
+        { status: 502 }
+      );
+    }
+
+    // audioUrl is the public HeyGen CDN URL — small enough to send to the client
+    // and directly usable as <audio src> for preview.
+    return NextResponse.json({ audioAssetId, audioUrl, durationSeconds });
   } catch (error: unknown) {
     console.error('Unexpected error in /api/generate-full-audio:', error);
     const message = error instanceof Error ? error.message : 'Okänt fel';
